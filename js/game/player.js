@@ -938,7 +938,7 @@ export class Player extends Living {
 
   updateMesh(partial, visible) {
     if (!this.mesh) return;
-    this.mesh.visible = visible;
+    this.mesh.visible = !!visible;
     if (!visible) return;
     const [x, y, z] = this.lerpPos(partial);
     this.mesh.position.set(x, y, z);

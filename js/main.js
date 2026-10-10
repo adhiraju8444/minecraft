@@ -855,7 +855,7 @@ class Game {
         if (!e.mesh && near) e.createMesh(g);
         if (e.mesh) e.updateMesh(partial, near);
       }
-      if (p && p.mesh) p.updateMesh(partial, this.perspective !== 0 && p.mode !== 'spectator' || (p.sleeping && this.perspective !== 0));
+      if (p && p.mesh) p.updateMesh(partial, this.perspective !== 0 && p.mode !== 'spectator');
       // Target outline
       if (p && p.hit && this.state === 'playing' && this.ui.hudVisible && p.mode !== 'spectator') g.setSelection(world, p.hit);
       else g.setSelection(world, null);

@@ -84,29 +84,30 @@ export class Hand {
     const id = this.heldId;
     const def = id >= 0 ? ITEMS[id] : null;
 
+    h.rotation.order = 'YXZ';
     if (id < 0) {
-      // Bare arm, pointing forward from the lower right.
+      // Bare arm reaching forward from the lower right.
       this.mesh.position.set(0, 0, 0);
       this.mesh.rotation.set(0, 0, 0);
-      h.position.set(0.55 - sr * 0.25, -0.62 - lowered + Math.sin(swing * Math.PI * 2) * 0.12, -0.6 - sr * 0.15);
-      h.rotation.set(-1.25 + sr * 0.3, 0.35 - sq * 0.4, 0.15 - sq * 0.3);
-      h.scale.setScalar(0.9);
+      h.position.set(0.56 - sr * 0.3, -0.56 - lowered + Math.sin(swing * Math.PI * 2) * 0.1, -0.36 - sr * 0.2);
+      h.rotation.set(1.85 - sr * 0.6, 0.32 + sq * 0.5, -0.1);
+      h.scale.setScalar(1);
     } else if (this.mesh.userData.block) {
       this.mesh.position.set(0, 0, 0);
       this.mesh.rotation.set(0, Math.PI / 4, 0);
       this.mesh.scale.setScalar(1);
-      h.position.set(0.52 - sr * 0.3, -0.48 - lowered + Math.sin(swing * Math.PI * 2) * 0.15, -0.78 - sr * 0.1);
+      h.position.set(0.5 - sr * 0.28, -0.44 - lowered + Math.sin(swing * Math.PI * 2) * 0.12, -0.78 - sr * 0.1);
       h.rotation.set(-sr * 0.5, -sq * 0.6, -sr * 0.2);
-      h.scale.setScalar(0.42);
+      h.scale.setScalar(0.3);
     } else {
-      // Flat item held like a tool.
+      // Flat item held like a tool: blade up and to the left.
       const tool = def && (def.tool || def.use === 'bow');
       this.mesh.position.set(0, 0, 0);
-      this.mesh.rotation.set(0, -Math.PI / 2 + 0.3, 0.2);
+      this.mesh.rotation.set(0, Math.PI - 0.6, 0.12);
       this.mesh.scale.setScalar(1);
-      h.position.set(0.56 - sr * 0.3, -0.42 - lowered + Math.sin(swing * Math.PI * 2) * 0.15, -0.72 - sr * 0.1);
-      h.rotation.set(-sr * 0.8, -sq * 0.5, -sr * 0.4);
-      h.scale.setScalar(tool ? 0.62 : 0.55);
+      h.position.set(0.5 - sr * 0.3, -0.36 - lowered + Math.sin(swing * Math.PI * 2) * 0.12, -0.74 - sr * 0.1);
+      h.rotation.set(-sr * 0.9, -sq * 0.4, -sr * 0.35);
+      h.scale.setScalar(tool ? 0.46 : 0.38);
     }
 
     if (using) {

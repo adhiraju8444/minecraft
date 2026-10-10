@@ -6,7 +6,6 @@
   "private": true,
   "scripts": {
     "start": "npx --yes http-server -c-1 -p 8080 .",
-    "check": "node tools/check.mjs"
-  },
-  "license": "MIT"
+    "test": "node tools/test-browser.mjs"
+  }
 }
