@@ -1,0 +1,12 @@
+{
+  "name": "blockforge",
+  "version": "1.0.0",
+  "description": "A voxel survival sandbox game that runs in the browser.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "npx --yes http-server -c-1 -p 8080 .",
+    "check": "node tools/check.mjs"
+  },
+  "license": "MIT"
+}
