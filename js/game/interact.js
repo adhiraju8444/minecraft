@@ -100,9 +100,9 @@ export function lookFacing(yaw) {
 function entitiesBlock(game, x, y, z, id, meta) {
   if (!isSolid[id]) return false;
   const boxes = blockBoxes(game.world, x, y, z, id, meta, 'collide');
-  const ents = [game.player, ...game.world.entities.filter((e) => e.blocksPlacement)];
+  const ents = [...game.players, ...game.world.entities.filter((e) => e.blocksPlacement)];
   for (const e of ents) {
-    if (!e || e.dead || (e === game.player && game.player.mode === 'spectator')) continue;
+    if (!e || e.dead || (e.isPlayer && e.mode === 'spectator')) continue;
     for (const b of boxes) {
       const a = new AABB(x + b[0], y + b[1], z + b[2], x + b[3], y + b[4], z + b[5]);
       if (a.intersects(e.box)) return true;

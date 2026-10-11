@@ -24,6 +24,12 @@ const COMMANDS = {
   locate: { usage: '/locate <biome>', desc: 'Find the nearest biome' },
 };
 
+// Extra commands a multiplayer server understands.
+const MP_COMMANDS = {
+  list: '/list', msg: '/msg <player> <message>', me: '/me <action>', say: '/say <message>', kick: '/kick <player> [reason]',
+  ban: '/ban <player> [reason]', 'ban-ip': '/ban-ip <player>', pardon: '/pardon <name>', op: '/op <player>', deop: '/deop <player>', save: '/save',
+};
+
 export class Commands {
   constructor(game) {
     this.game = game;
@@ -45,6 +51,11 @@ export class Commands {
 
   run(text) {
     const g = this.game;
+    if (g.net) {
+      // Multiplayer: the server runs commands.
+      g.net.send({ t: 'chat', m: text });
+      return;
+    }
     const p = g.player;
     const w = g.world;
     const [cmd, ...args] = text.slice(1).trim().split(/\s+/);
@@ -231,8 +242,18 @@ export class Commands {
 
   suggest(text) {
     const parts = text.slice(1).split(' ');
+    const net = this.game.net;
     if (parts.length <= 1) {
-      return Object.keys(COMMANDS).filter((c) => c.startsWith(parts[0].toLowerCase())).map((c) => '/' + c);
+      const names = net ? [...Object.keys(COMMANDS), ...Object.keys(MP_COMMANDS)] : Object.keys(COMMANDS);
+      return names.filter((c) => c.startsWith(parts[0].toLowerCase())).map((c) => '/' + c);
+    }
+    if (net && MP_COMMANDS[parts[0].toLowerCase()]) {
+      const cmd = parts[0].toLowerCase();
+      if (parts.length === 2 && ['msg', 'tell', 'kick', 'ban', 'ban-ip', 'op', 'deop', 'tp'].includes(cmd)) {
+        const last = parts[1].toLowerCase();
+        return net.players.map((p) => p[1]).filter((n) => n.toLowerCase().startsWith(last));
+      }
+      return [MP_COMMANDS[cmd]];
     }
     const cmd = parts[0].toLowerCase();
     const last = (parts[parts.length - 1] || '').toLowerCase();

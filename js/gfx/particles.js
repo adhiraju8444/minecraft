@@ -55,6 +55,7 @@ export class Particles {
 
   // Burst of fragments when a block is destroyed.
   blockBreak(x, y, z, id, meta) {
+    if (this.tap) this.tap(x, y, z, id, meta); // multiplayer: share with others
     const layer = tileLayer(id, meta, 4);
     const [r, g, b] = id === 2 ? [1, 1, 1] : this.blockTint(id);
     const n = 4;

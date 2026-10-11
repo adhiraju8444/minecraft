@@ -128,8 +128,8 @@ export class XPOrb extends Entity {
     this.baseTick();
     if (this.delay > 0) this.delay--;
     this.vy -= 0.03;
-    const p = this.game.player;
-    if (p && p.alive && p.mode !== 'spectator') {
+    const p = this.game.nearestPlayer(this.x, this.y, this.z, 8, (q) => q.alive && q.mode !== 'spectator');
+    if (p) {
       const dx = p.x - this.x, dy = p.y + p.eyeHeight() / 2 - this.y, dz = p.z - this.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz) / 8;
       if (d < 1) {
@@ -344,7 +344,7 @@ export class Projectile extends Entity {
     let maxT = blockHit ? blockHit.t : speed;
     // Entity hits
     let hitEnt = null;
-    const cands = [this.game.player, ...world.entities];
+    const cands = [...this.game.players, ...world.entities];
     for (const e of cands) {
       if (!e || e === this || e.dead || !e.targetable && !e.isPlayer) continue;
       if (e === this.shooter && this.age < 5) continue;
@@ -385,9 +385,13 @@ export class Projectile extends Entity {
       if (ok) {
         if (e.knockback) {
           const h = Math.hypot(this.vx, this.vz) || 1;
-          e.vx += (this.vx / h) * 0.6 * 0.4;
-          e.vz += (this.vz / h) * 0.6 * 0.4;
-          e.vy = Math.min(0.4, e.vy + 0.1);
+          const kx = (this.vx / h) * 0.24, kz = (this.vz / h) * 0.24;
+          if (e.push) e.push(kx, 0.1, kz);
+          else {
+            e.vx += kx;
+            e.vz += kz;
+            e.vy = Math.min(0.4, e.vy + 0.1);
+          }
         }
         game.audio.play('arrow_hit', { x: this.x, y: this.y, z: this.z });
         if (this.shooter && this.shooter.isPlayer && !e.isPlayer) game.audio.play('ding');

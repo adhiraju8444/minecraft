@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   keys: {
     forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sneak: 'ShiftLeft', sprint: 'ControlLeft',
     inventory: 'KeyE', drop: 'KeyQ', chat: 'KeyT', command: 'Slash', perspective: 'F5', debug: 'F3', hideHud: 'F1', screenshot: 'F2',
+    playerList: 'Tab',
   },
 };
 
@@ -44,7 +45,7 @@ export function saveSettings(s) {
 export const KEY_LABELS = {
   forward: 'Walk Forward', back: 'Walk Backward', left: 'Strafe Left', right: 'Strafe Right', jump: 'Jump / Swim Up / Fly Up', sneak: 'Sneak / Fly Down',
   sprint: 'Sprint', inventory: 'Inventory', drop: 'Drop Item', chat: 'Open Chat', command: 'Open Command', perspective: 'Change Camera View',
-  debug: 'Debug Screen', hideHud: 'Hide HUD', screenshot: 'Screenshot',
+  debug: 'Debug Screen', hideHud: 'Hide HUD', screenshot: 'Screenshot', playerList: 'List Players',
 };
 
 export function keyName(code) {

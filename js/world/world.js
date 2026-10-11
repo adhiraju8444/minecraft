@@ -166,6 +166,11 @@ export class World {
     if (y < 0 || y >= HEIGHT) return false;
     const c = this.getChunk(x >> 4, z >> 4);
     if (!c) return false;
+    // A multiplayer client only predicts its own edits locally; the server
+    // runs the block rules and sends back the real result.
+    const fromPlayer = this.remote && !this.applyingRemote;
+    const wanted = flags;
+    if (this.remote) flags = SILENT;
     const i = (x & 15) | ((z & 15) << 4) | (y << 8);
     const old = c.blocks[i];
     const oldMeta = c.meta[i];
@@ -174,6 +179,7 @@ export class World {
     c.meta[i] = meta;
     if (id !== 0 && y > c.maxY) c.maxY = y;
     c.modified = true;
+    c.changed = true;
     if (old !== id) {
       const te = c.tileEntities.get(i);
       if (te) {
@@ -182,7 +188,7 @@ export class World {
         if (!keep) {
           c.tileEntities.delete(i);
           this.activeTiles.delete(te);
-          if (te.onRemove) te.onRemove(this);
+          if (!this.remote) this.spillTile(te);
         } else te.blockId = id;
       }
       if (!c.tileEntities.has(i)) {
@@ -195,11 +201,33 @@ export class World {
     }
     if (c.lit && old !== id) relightCell(c, i, old, id);
     markCellDirty(c, i);
+    if (this.onChange) this.onChange(x, y, z, id, meta);
+    if (fromPlayer) this.remote.sendSet(x, y, z, id, meta, wanted);
     if (flags & NOTIFY) {
       this.notifyNeighbors(x, y, z);
       behaviors.onBlockChanged(this, x, y, z, old, id, meta);
     }
     return true;
+  }
+
+  // Apply a block that came from the server (no echo back, no block rules).
+  applyRemote(x, y, z, id, meta) {
+    this.applyingRemote = true;
+    try {
+      return this.setBlock(x, y, z, id, meta, SILENT);
+    } finally {
+      this.applyingRemote = false;
+    }
+  }
+
+  // Chests and furnaces drop what they held when they are broken.
+  spillTile(te) {
+    if (!te.items || !this.game || !this.game.dropItem) return;
+    for (let k = 0; k < te.items.length; k++) {
+      const s = te.items[k];
+      if (s && s.count > 0) this.game.dropItem(te.x + 0.5, te.y + 0.5, te.z + 0.5, s, null, true);
+      te.items[k] = null;
+    }
   }
 
   setMeta(x, y, z, meta, notify = false) {
@@ -222,8 +250,17 @@ export class World {
   }
 
   markTileDirty(te) {
+    // On a multiplayer client the server owns container contents.
+    if (this.remote) {
+      this.remote.sendTile(te);
+      return;
+    }
     const c = this.getChunk(te.x >> 4, te.z >> 4);
-    if (c) c.modified = true;
+    if (c) {
+      c.modified = true;
+      c.changed = true;
+    }
+    if (this.onTileChange) this.onTileChange(te);
   }
 
   // ---------------------------------------------------------- ticks
@@ -310,10 +347,10 @@ export class World {
         this.day++;
       }
     }
-    // Weather
+    // Weather (a multiplayer client gets it from the server)
     const w = this.weather;
-    w.timer--;
-    if (w.timer <= 0) {
+    if (!this.remote) w.timer--;
+    if (w.timer <= 0 && !this.remote) {
       w.raining = !w.raining;
       w.timer = w.raining ? 12000 + Math.floor(Math.random() * 12000) : 12000 + Math.floor(Math.random() * 156000);
     }

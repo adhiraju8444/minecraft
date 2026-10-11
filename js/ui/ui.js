@@ -10,6 +10,7 @@ import { BIOME_NAMES } from '../world/worldgen.js';
 import { FACING_NAMES } from '../world/constants.js';
 import { BLOCKS } from '../data/blocks.js';
 import { TouchControls } from './touch.js';
+import { fetchServerInfo } from '../net/client.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (html) => {
@@ -124,8 +125,12 @@ export class UI {
       this.back();
       return;
     }
-    if (this.screenName === 'worlds' || this.screenName === 'create') {
+    if (this.screenName === 'worlds' || this.screenName === 'create' || this.screenName === 'multiplayer') {
       this.showTitle();
+      return;
+    }
+    if (this.screenName === 'neterror') {
+      this.netErrorBack?.();
       return;
     }
     if (g.state === 'playing' && !this.screen) this.showPause();
@@ -155,6 +160,7 @@ export class UI {
         <div class="logo-wrap"><canvas id="title-logo" width="900" height="180" aria-label="Blockforge"></canvas><div class="splash">${esc(splash)}</div></div>
         <div class="menu-col">
           <button class="btn" data-act="single">Singleplayer</button>
+          <button class="btn" data-act="multi">Multiplayer</button>
           <button class="btn" data-act="options">Options…</button>
           <button class="btn" data-act="help">How to Play</button>
         </div>
@@ -163,6 +169,7 @@ export class UI {
       </div>`);
     this.bindButtons(node, {
       single: () => this.showWorlds(),
+      multi: () => this.showMultiplayer(),
       options: () => this.showOptions(() => this.showTitle()),
       help: () => this.showHelp(() => this.showTitle()),
     });
@@ -461,21 +468,142 @@ export class UI {
     this.setScreen('help', node);
   }
 
+  // ---------------------------------------------------------------- multiplayer
+  showMultiplayer() {
+    const g = this.game;
+    let saved = '';
+    try {
+      saved = localStorage.getItem('blockforge.server') || '';
+    } catch {
+      saved = '';
+    }
+    const name = g.settings.name && g.settings.name !== 'Player' ? g.settings.name : '';
+    const node = el(`
+      <div class="screen dim">
+        <div class="menu-title txt-shadow">Play Multiplayer</div>
+        <div class="menu-col" style="width:min(calc(var(--gs) * 230), 94vw)">
+          <div class="field"><label for="mp-name">Your name</label><input id="mp-name" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="1-16 letters or numbers" value="${esc(name)}"></div>
+          <div class="field"><label for="mp-addr">Server address</label><input id="mp-addr" type="text" maxlength="200" autocomplete="url" spellcheck="false" placeholder="example.com or 192.168.1.20:8080" value="${esc(saved)}">
+            <div class="hint" id="mp-status">&nbsp;</div></div>
+          <div class="field" id="mp-pw-field" style="display:none"><label for="mp-pw">Server password</label><input id="mp-pw" type="password" maxlength="64" autocomplete="off" spellcheck="false"></div>
+          <div class="btn-row"><button class="btn" data-act="join">Join Server</button><button class="btn" data-act="cancel">Cancel</button></div>
+          <div class="hint mp-help">Everyone who joins the same server plays in one shared world. To run your own server, see “Multiplayer” in the README.</div>
+        </div>
+      </div>`);
+    const nameIn = $('#mp-name', node), addrIn = $('#mp-addr', node), pwIn = $('#mp-pw', node), status = $('#mp-status', node);
+    let probe = 0;
+    const check = async () => {
+      const id = ++probe;
+      const addr = addrIn.value.trim();
+      status.textContent = addr || this.servedByServer ? 'Checking server…' : 'Type the address of a Blockforge server';
+      if (!addr && !this.servedByServer) return;
+      const info = await fetchServerInfo(addr);
+      if (id !== probe || !node.isConnected) return;
+      if (!info) {
+        status.textContent = 'No Blockforge server answered at that address (yet)';
+        status.style.color = '#ff9a9a';
+        return;
+      }
+      status.style.color = '#9be89b';
+      status.textContent = `${info.name} — ${info.online}/${info.max} online — ${info.motd}`;
+      $('#mp-pw-field', node).style.display = info.password ? '' : 'none';
+    };
+    let timer = 0;
+    addrIn.addEventListener('input', () => {
+      clearTimeout(timer);
+      status.style.color = '';
+      timer = setTimeout(check, 450);
+    });
+    const join = () => {
+      const n = nameIn.value.trim().replace(/\s+/g, ' ');
+      if (!/^[A-Za-z0-9_ -]{1,16}$/.test(n)) {
+        status.textContent = 'Pick a name with 1 to 16 letters, numbers, spaces, - or _';
+        status.style.color = '#ff9a9a';
+        nameIn.focus();
+        return;
+      }
+      const address = addrIn.value.trim();
+      if (!address && !this.servedByServer) {
+        status.textContent = 'Type the address of a Blockforge server';
+        status.style.color = '#ff9a9a';
+        addrIn.focus();
+        return;
+      }
+      try {
+        localStorage.setItem('blockforge.server', address);
+      } catch {
+        /* not remembered */
+      }
+      g.joinServer({ address, name: n, password: pwIn.value });
+    };
+    this.bindButtons(node, { join, cancel: () => this.showTitle() });
+    node.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter') join();
+    });
+    this.setScreen('multiplayer', node);
+    if (!name) setTimeout(() => nameIn.focus(), 40);
+    // Pages served by a Blockforge server join that server by default.
+    if (this.servedByServer === undefined) {
+      fetchServerInfo('', 2500).then((info) => {
+        this.servedByServer = !!info;
+        if (info && node.isConnected && !addrIn.value) {
+          addrIn.placeholder = `${location.host} (this server)`;
+          check();
+        }
+      });
+    } else if (this.servedByServer && !addrIn.value) {
+      addrIn.placeholder = `${location.host} (this server)`;
+      check();
+    } else if (addrIn.value) check();
+  }
+
+  showNetError(title, message, back) {
+    this.netErrorBack = back;
+    const node = el(`
+      <div class="screen dark">
+        <div class="menu-title txt-shadow">${esc(title)}</div>
+        <div class="menu-sub" style="max-width:min(calc(var(--gs) * 280), 92vw);line-height:1.5">${esc(message || '')}</div>
+        <div class="menu-col" style="margin-top:calc(var(--gs) * 10)"><button class="btn" data-act="back">Back</button></div>
+      </div>`);
+    this.bindButtons(node, { back: () => back() });
+    this.setScreen('neterror', node);
+  }
+
+  // Hold Tab in multiplayer to see who is online.
+  showPlayerList(show) {
+    const net = this.game.net;
+    if (!show || !net) {
+      if (this.playerListEl) this.playerListEl.remove();
+      this.playerListEl = null;
+      return;
+    }
+    if (!this.playerListEl) {
+      this.playerListEl = el('<div class="player-list panel"></div>');
+      this.hud.appendChild(this.playerListEl);
+    }
+    const rows = net.players.map(([, name, mode, ping, op]) => {
+      const bars = ping < 150 ? 5 : ping < 300 ? 4 : ping < 600 ? 3 : ping < 1000 ? 2 : 1;
+      return `<div class="pl-row"><span class="pl-name${mode === 'spectator' ? ' spec' : ''}">${esc(name)}${op ? ' <span class="pl-op">★</span>' : ''}</span><span class="pl-ping" title="${ping} ms">${'▮'.repeat(bars)}${'▯'.repeat(5 - bars)}</span></div>`;
+    });
+    this.playerListEl.innerHTML = `<div class="pl-title">${esc(this.game.meta?.name || 'Server')} — ${net.players.length} online</div>${rows.join('')}`;
+  }
+
   // ---------------------------------------------------------------- in-game screens
   showPause() {
     const g = this.game;
     if (g.state !== 'playing') return;
     g.input.exitLock();
     g.input.releaseAll();
+    const mp = !!g.net;
     const node = el(`
       <div class="screen dark">
         <div class="menu-title txt-shadow">Game Menu</div>
         <div class="menu-col">
           <button class="btn" data-act="back">Back to Game</button>
           <div class="btn-row"><button class="btn" data-act="options">Options…</button><button class="btn" data-act="help">How to Play</button></div>
-          <button class="btn" data-act="quit">Save and Quit to Title</button>
+          <button class="btn" data-act="quit">${mp ? 'Disconnect' : 'Save and Quit to Title'}</button>
         </div>
-        <div class="menu-sub" id="pause-saved"></div>
+        <div class="menu-sub" id="pause-saved">${mp ? 'Playing on ' + esc(g.meta?.name || 'a server') + ' — the world keeps going while this menu is open' : ''}</div>
       </div>`);
     this.bindButtons(node, {
       back: () => this.resumeGame(),
@@ -484,7 +612,7 @@ export class UI {
       quit: () => g.quitToTitle(),
     });
     this.setScreen('pause', node);
-    g.saveAll().then(() => {
+    if (!mp) g.saveAll().then(() => {
       const t = $('#pause-saved', node);
       if (t) t.textContent = 'Game saved';
     });
@@ -554,12 +682,14 @@ export class UI {
     this.game.input.exitLock();
     this.game.input.releaseAll();
     this.containers.openFurnace(te);
+    if (this.game.net) this.game.net.openTile(te);
   }
   openChest(te) {
     if (!te) return;
     this.game.input.exitLock();
     this.game.input.releaseAll();
     this.containers.openChest(te);
+    if (this.game.net) this.game.net.openTile(te);
   }
 
   // ---------------------------------------------------------------- HUD
@@ -782,6 +912,7 @@ export class UI {
       `Day ${w.day + 1}, time ${Math.floor(w.time)}${w.weather.raining ? ', raining' : ''}`,
       `Mode: ${p.mode}, difficulty ${DIFFICULTY[g.difficulty]}`,
     ];
+    if (g.net) left.push(`Server: ${g.meta?.name || '?'}, ${g.net.players.length} online, ${g.net.proxies.size} remote entities`);
     const right = [
       `Seed: ${w.seed}`,
       `Render distance: ${g.settings.renderDist}`,
@@ -859,6 +990,7 @@ export class UI {
       if (text) {
         this.chatHistory.push(text);
         if (text.startsWith('/')) this.game.commands.run(text);
+        else if (this.game.net) this.game.net.send({ t: 'chat', m: text });
         else this.chat(`<${this.game.player.name}> ${text}`);
       }
       this.closeChat();

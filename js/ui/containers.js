@@ -265,6 +265,7 @@ export class ContainerUI {
   }
 
   awardFurnaceXP() {
+    if (this.game.net) return; // the server hands out furnace experience
     const te = this.te;
     if (!te || te.xp <= 0) return;
     let xp = Math.floor(te.xp);
@@ -806,6 +807,7 @@ export class ContainerUI {
     if (this.grid && p) this.clearGridToInventory();
     if (this.kind === 'chest' && !silent) this.game.audio.play('chest_close', { x: this.te.x + 0.5, y: this.te.y + 0.5, z: this.te.z + 0.5 });
     if (this.kind === 'furnace') this.awardFurnaceXP();
+    if (this.te && this.game.net) this.game.net.closeTile();
     this.grid = null;
     this.te = null;
     this.open = false;
@@ -829,6 +831,12 @@ export class ContainerUI {
   // ---------------------------------------------------------------- per frame
   update() {
     if (!this.open) return;
+    // The chest or furnace was broken (by someone else, in multiplayer).
+    if (this.te && this.game.world && this.game.world.getTileEntity(this.te.x, this.te.y, this.te.z) !== this.te) {
+      this.close(true);
+      this.game.resume();
+      return;
+    }
     for (const s of this.slots) {
       const st = s.get();
       this.ui.renderItem(s.item, st);

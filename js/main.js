@@ -9,24 +9,26 @@ import { Input } from './input.js';
 import { UI } from './ui/ui.js';
 import { AudioEngine } from './audio/audio.js';
 import { Commands } from './game/commands.js';
-import { loadSettings } from './settings.js';
+import { loadSettings, saveSettings } from './settings.js';
 import { WorldStore, saveWorldMeta, loadWorldMeta } from './storage/db.js';
 import { seedFromInput } from './util/rng.js';
 import { ItemEntity, XPOrb, FallingBlock, PrimedTNT, Projectile } from './entity/objects.js';
 import { Mob, createMob } from './entity/mobs.js';
 import { Spawner, randomWool } from './entity/spawner.js';
 import { naturalDrops } from './game/interact.js';
-import { serializeTile, deserializeTile } from './world/tileentities.js';
+import { serializeTile, deserializeTile, createTileEntity } from './world/tileentities.js';
 import { B, BLOCKS, isSolid } from './data/blocks.js';
 import { I, ITEMS } from './data/items.js';
 import { raycast, boxCollides, AABB } from './world/physics.js';
 import { TICK_MS, SEA_LEVEL } from './world/constants.js';
 import { serializeStack, deserializeStack } from './game/inventory.js';
+import { GameCore } from './game/core.js';
+import { NetClient, playerKey, serverAddress } from './net/client.js';
+import { proxyTick } from './net/entities.js';
 
-const XP_SIZES = [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3, 1];
-
-class Game {
+class Game extends GameCore {
   constructor() {
+    super();
     this.canvas = document.getElementById('game');
     this.settings = loadSettings();
     this.state = 'boot';
@@ -47,6 +49,7 @@ class Game {
     this.stepDist = 0;
     this.eyeSmooth = 1.62;
     this.saving = false;
+    this.net = null; // multiplayer connection while playing on a server
   }
 
   async boot() {
@@ -101,6 +104,7 @@ class Game {
   }
 
   disposeWorld() {
+    this.leaveServer();
     if (this.loader) this.loader.destroy();
     if (this.world) {
       for (const e of this.world.entities) e.disposeMesh();
@@ -157,26 +161,7 @@ class Game {
     player.createMesh(this.gfx);
     this.ui.containers.close(true);
 
-    // Load the area around the player before starting.
-    const need = Math.min(3, this.settings.renderDist);
-    const t0 = performance.now();
-    await new Promise((resolve) => {
-      const step = () => {
-        if (this.world !== world) return resolve();
-        this.loader.update(player.x, player.z, this.settings.renderDist, 30);
-        const pending = this.gfx.updateMeshes(world, player.x, player.y, player.z, need, 30);
-        let have = 0, total = 0;
-        const pcx = Math.floor(player.x) >> 4, pcz = Math.floor(player.z) >> 4;
-        for (let dz = -need - 1; dz <= need + 1; dz++) for (let dx = -need - 1; dx <= need + 1; dx++) {
-          total++;
-          if (world.getChunk(pcx + dx, pcz + dz)) have++;
-        }
-        this.ui.setLoading(have / total * 0.9 + (pending === 0 && have === total ? 0.1 : 0), have < total ? 'Building terrain' : 'Preparing spawn area');
-        if ((have === total && pending === 0) || performance.now() - t0 > 30000) resolve();
-        else requestAnimationFrame(step);
-      };
-      step();
-    });
+    await this.waitForArea(world, player);
     if (this.world !== world) return;
     if (!pd) {
       // Place a new player on solid ground.
@@ -195,6 +180,145 @@ class Game {
     this.acc = 0;
     this.showClickToPlay();
     if (!pd) this.ui.chat(`Welcome to ${meta.name}! Press ${'T'} to chat, /help for commands.`, '#ffe14d');
+  }
+
+  // Load the area around the player before starting.
+  waitForArea(world, player) {
+    const need = Math.min(3, this.settings.renderDist);
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const step = () => {
+        if (this.world !== world) return resolve();
+        this.loader.update(player.x, player.z, this.settings.renderDist, 30);
+        const pending = this.gfx.updateMeshes(world, player.x, player.y, player.z, need, 30);
+        let have = 0, total = 0;
+        const pcx = Math.floor(player.x) >> 4, pcz = Math.floor(player.z) >> 4;
+        for (let dz = -need - 1; dz <= need + 1; dz++) for (let dx = -need - 1; dx <= need + 1; dx++) {
+          total++;
+          if (world.getChunk(pcx + dx, pcz + dz)) have++;
+        }
+        this.ui.setLoading(have / total * 0.9 + (pending === 0 && have === total ? 0.1 : 0), have < total ? 'Building terrain' : 'Preparing spawn area');
+        if ((have === total && pending === 0) || performance.now() - t0 > 45000) resolve();
+        else requestAnimationFrame(step);
+      };
+      step();
+    });
+  }
+
+  // ---------------------------------------------------------------- multiplayer
+  async joinServer({ address, name, password }) {
+    const addr = serverAddress(address);
+    this.ui.closeScreen();
+    this.ui.showLoading('Connecting to the server');
+    this.ui.setLoading(0.05, addr.host);
+    this.settings.name = name;
+    saveSettings(this.settings);
+    const net = new NetClient(this, addr.ws);
+    let welcome;
+    try {
+      welcome = await net.connect({ name, key: playerKey(), vd: this.settings.renderDist, pw: password || undefined });
+    } catch (e) {
+      net.close();
+      this.ui.showNetError('Could not join the server', e.message, () => this.ui.showMultiplayer());
+      return;
+    }
+    if (this.state !== 'title') {
+      net.close();
+      return;
+    }
+    this.disposeWorld();
+    this.state = 'loading';
+    this.ui.showLoading('Joining ' + (welcome.server?.name || 'the server'));
+    this.net = net;
+    net.onClose = (reason) => this.onNetClosed(reason);
+    this.difficulty = welcome.difficulty;
+    this.meta = { name: welcome.server?.name || 'Server', multiplayer: true, spawn: welcome.spawn, mode: welcome.mode, difficulty: welcome.difficulty, hardcore: false };
+    const world = new World(this, {
+      seed: welcome.seed, time: welcome.time, day: welcome.day, rules: welcome.rules,
+      weather: { raining: !!welcome.raining, strength: welcome.strength || 0, timer: 1e9 },
+    });
+    world.remote = net;
+    this.world = world;
+    this.loader = new ChunkLoader(world, null, this.netChunkHooks(), net);
+    net.attach(world, this.loader);
+    // Share the local player's sounds and block-break particles.
+    this.audio.tap = (n, o) => net.tapSound(n, o);
+    this.gfx.particles.tap = (x, y, z, id, meta) => net.tapBreak(x, y, z, id, meta);
+    const pd = welcome.data;
+    const spawn = welcome.spawn;
+    const player = new Player(world, pd ? pd.x : spawn.x, pd ? pd.y : spawn.y, pd ? pd.z : spawn.z);
+    player.name = welcome.name;
+    player.setMode(welcome.mode);
+    if (pd) this.loadPlayer(player, pd);
+    player.setMode(welcome.mode);
+    const swing = player.swing.bind(player);
+    player.swing = () => {
+      if (!player.swinging || player.swingTime >= 3) net.swingCount++;
+      swing();
+    };
+    this.player = player;
+    player.createMesh(this.gfx);
+    this.ui.containers.close(true);
+    await this.waitForArea(world, player);
+    if (this.world !== world || net.closed) return;
+    if (!pd) {
+      const x = Math.floor(spawn.x), z = Math.floor(spawn.z);
+      player.teleport(x + 0.5, this.safeY(x, z), z + 0.5);
+    } else if (boxCollides(world, player.box)) {
+      player.teleport(player.x, this.safeY(Math.floor(player.x), Math.floor(player.z)), player.z);
+    }
+    if (player.health <= 0) player.health = 20;
+    net.send({ t: 'ready' });
+    net.sendState(true);
+    net.sendData();
+    net.flushOut();
+    this.state = 'playing';
+    this.ui.closeScreen();
+    this.ui.updateHudVisibility();
+    this.acc = 0;
+    this.showClickToPlay();
+    const motd = welcome.server?.motd;
+    this.ui.chat(`Connected to ${this.meta.name}${motd ? ' — ' + motd : ''}`, '#ffe14d');
+    if (!pd) this.ui.chat('Press T to chat, Tab to see who is online, /help for commands.', '#ffe14d');
+  }
+
+  leaveServer() {
+    const net = this.net;
+    if (!net) return;
+    this.net = null;
+    net.onClose = null;
+    net.close('Disconnected');
+    if (this.audio) this.audio.tap = null;
+    if (this.gfx) this.gfx.particles.tap = null;
+  }
+
+  onNetClosed(reason) {
+    if (!this.net) return;
+    this.net = null;
+    this.audio.tap = null;
+    this.gfx.particles.tap = null;
+    this.ui.hideAll();
+    this.input.exitLock();
+    this.startMenuWorld();
+    this.ui.showNetError('Disconnected', reason, () => this.ui.showTitle());
+  }
+
+  // Chunks from the server carry no container contents; containers ask for them when opened.
+  netChunkHooks() {
+    return {
+      onBeforeAdd: (c, data, fromNet) => {
+        if (!fromNet) return;
+        const b = c.blocks;
+        for (let i = 0; i < b.length; i++) {
+          const id = b[i];
+          if (id !== B.chest && id !== B.furnace && id !== B.lit_furnace) continue;
+          const te = createTileEntity(id, (c.cx << 4) | (i & 15), i >> 8, (c.cz << 4) | ((i >> 4) & 15));
+          if (te) c.tileEntities.set(i, te);
+        }
+      },
+      onLoaded: () => {},
+      onUnload: (c) => this.gfx.disposeChunk(c),
+    };
   }
 
   safeY(x, z) {
@@ -346,9 +470,26 @@ class Game {
     this.world.entities = this.world.entities.filter((e) => !e.dead);
   }
 
+  // In multiplayer the server creates every entity.
+  addEntity(e) {
+    if (this.net) {
+      this.net.spawnEntity(e);
+      return e;
+    }
+    return super.addEntity(e);
+  }
+
   // Saves are queued so a save requested during another one still runs
   // (e.g. quitting right after an autosave started).
   saveAll() {
+    if (this.net) {
+      // The server keeps multiplayer saves; just make sure it has our latest state.
+      if (this.player && this.net.open) {
+        this.net.sendData();
+        this.net.flushOut();
+      }
+      return Promise.resolve();
+    }
     const run = () => this.saveNow();
     this.savePromise = (this.savePromise || Promise.resolve()).then(run, run);
     return this.savePromise;
@@ -389,6 +530,14 @@ class Game {
   }
 
   async quitToTitle() {
+    if (this.net) {
+      this.ui.hideAll();
+      this.saveAll();
+      this.input.exitLock();
+      this.startMenuWorld();
+      this.ui.showTitle();
+      return;
+    }
     this.ui.hideAll();
     this.ui.showLoading('Saving world');
     await this.saveAll();
@@ -398,101 +547,12 @@ class Game {
   }
 
   // ---------------------------------------------------------------- entities & hooks
-  addEntity(e) {
-    this.world.entities.push(e);
-    return e;
-  }
-
-  spawnMob(type, x, y, z, opts = {}) {
-    const m = createMob(this.world, type, x, y, z, opts);
-    if (m) this.addEntity(m);
-    return m;
-  }
-
-  dropItem(x, y, z, stack, thrower = null, toss = false) {
-    if (!stack || stack.count <= 0) return null;
-    const e = new ItemEntity(this.world, x, y, z, { ...stack });
-    if (thrower) {
-      const [dx, dy, dz] = thrower.lookDir();
-      e.vx = dx * 0.3 + (Math.random() - 0.5) * 0.04;
-      e.vy = dy * 0.3 + 0.1;
-      e.vz = dz * 0.3 + (Math.random() - 0.5) * 0.04;
-      e.pickupDelay = 40;
-    } else if (toss) {
-      e.vy = 0.3;
-    }
-    return this.addEntity(e);
-  }
-
   throwStack(p, stack) {
     this.dropItem(p.x, p.y + p.eyeHeight() - 0.3, p.z, stack, p);
   }
 
-  dropBlockItems(x, y, z, id, meta) {
-    for (const s of naturalDrops(id, meta)) this.dropItem(x + 0.5, y + 0.3, z + 0.5, s);
-  }
-
-  spawnXP(x, y, z, amount) {
-    while (amount > 0) {
-      const v = XP_SIZES.find((s) => s <= amount) || 1;
-      amount -= v;
-      this.addEntity(new XPOrb(this.world, x + (Math.random() - 0.5) * 0.5, y, z + (Math.random() - 0.5) * 0.5, v));
-    }
-  }
-
-  spawnFallingBlock(x, y, z, id, meta) {
-    this.addEntity(new FallingBlock(this.world, x, y, z, id, meta));
-  }
-
-  primeTNT(x, y, z, fuse) {
-    this.addEntity(new PrimedTNT(this.world, x, y, z, fuse));
-    this.audio.play('fuse', { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
-  }
-
-  fizz(x, y, z) {
-    this.audio.play('fizz', { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
-    for (let i = 0; i < 8; i++) this.gfx.particles.emit('smoke', x + Math.random(), y + 1, z + Math.random(), { r: 0.6, g: 0.6, b: 0.6 });
-  }
-
-  onSplash(e) {
-    this.audio.play('splash', { x: e.x, y: e.y, z: e.z });
-    for (let i = 0; i < 12; i++) this.gfx.particles.emit('splash', e.x + (Math.random() - 0.5) * e.w, e.y + 0.2, e.z + (Math.random() - 0.5) * e.w);
-  }
-
   onFall(e, dmg) {
     if (e === this.player) this.audio.blockSound('stone', dmg > 4 ? 'break' : 'place', e.x, e.y, e.z);
-  }
-
-  throwItem(p, kind) {
-    const [dx, dy, dz] = p.lookDir();
-    const pr = new Projectile(this.world, p, p.x + dx * 0.4, p.y + p.eyeHeight() - 0.1, p.z + dz * 0.4, dx * 1.5 + p.vx, dy * 1.5, dz * 1.5 + p.vz, kind);
-    this.addEntity(pr);
-  }
-
-  shootArrow(p, speed, crit) {
-    const [dx, dy, dz] = p.lookDir();
-    const a = new Projectile(this.world, p, p.x + dx * 0.4, p.y + p.eyeHeight() - 0.1, p.z + dz * 0.4, dx * speed, dy * speed, dz * speed, 'arrow');
-    a.crit = crit;
-    a.vx += p.vx;
-    a.vz += p.vz;
-    if (!p.onGround) a.vy += p.vy;
-    this.addEntity(a);
-  }
-
-  mobShoot(mob, target) {
-    const sx = mob.x, sy = mob.y + mob.eyeHeight() - 0.1, sz = mob.z;
-    const dx = target.x - sx, dz = target.z - sz;
-    const dy = target.y + target.h / 3 - sy;
-    const h = Math.hypot(dx, dz);
-    const vy = dy + h * 0.2;
-    const len = Math.hypot(dx, vy, dz) || 1;
-    const speed = 1.6;
-    const spread = (14 - this.difficulty * 4) * 0.0075;
-    const a = new Projectile(this.world, mob, sx + (dx / h) * 0.5, sy, sz + (dz / h) * 0.5,
-      (dx / len + (Math.random() - 0.5) * spread) * speed, (vy / len + (Math.random() - 0.5) * spread) * speed, (dz / len + (Math.random() - 0.5) * spread) * speed, 'arrow');
-    a.damageBase = 2 + this.difficulty * 0.11 + Math.random() * 0.5;
-    this.addEntity(a);
-    this.audio.play('bow', { x: sx, y: sy, z: sz });
   }
 
   eatParticles(p, id) {
@@ -522,71 +582,7 @@ class Game {
     this.gfx.particles.add({ x, y, z, vx, vy, vz, life: 12 + Math.random() * 10, layer: this.gfx.tiles.index.get('particle_spark'), size: 0.05, r, g, b, gravity: 0.04 });
   }
 
-  explode(x, y, z, power, source) {
-    const world = this.world;
-    const affected = new Map();
-    for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) for (let k = 0; k < 16; k++) {
-      if (!(i === 0 || i === 15 || j === 0 || j === 15 || k === 0 || k === 15)) continue;
-      let dx = (i / 15) * 2 - 1, dy = (j / 15) * 2 - 1, dz = (k / 15) * 2 - 1;
-      const l = Math.hypot(dx, dy, dz);
-      dx /= l; dy /= l; dz /= l;
-      let f = power * (0.7 + Math.random() * 0.6);
-      let px = x, py = y, pz = z;
-      while (f > 0) {
-        const bx = Math.floor(px), by = Math.floor(py), bz = Math.floor(pz);
-        const id = world.getBlock(bx, by, bz);
-        if (id !== 0 && id !== 255) {
-          f -= (BLOCKS[id].blast / 5 + 0.3) * 0.3;
-          if (f > 0) affected.set(`${bx},${by},${bz}`, [bx, by, bz]);
-        }
-        px += dx * 0.3; py += dy * 0.3; pz += dz * 0.3;
-        f -= 0.225;
-      }
-    }
-    // Hurt and push entities
-    const radius = power * 2;
-    const ents = [this.player, ...world.entities];
-    for (const e of ents) {
-      if (!e || e.dead || e === source) continue;
-      if (e.isPlayer && e.mode === 'spectator') continue;
-      const d = Math.hypot(e.x - x, e.y + e.h / 2 - y, e.z - z) / radius;
-      if (d > 1) continue;
-      const ex = e.x - x, ey = e.y + (e.eyeHeight ? e.eyeHeight() : e.h / 2) - y, ez = e.z - z;
-      const el = Math.hypot(ex, ey, ez) || 1;
-      // Exposure: fraction of rays from the explosion that reach the entity.
-      let seen = 0, total = 0;
-      for (const oy of [0.1, 0.5, 0.9]) for (const ox of [-0.3, 0.3]) {
-        total++;
-        const tx = e.x + ox * e.w, ty = e.y + oy * e.h, tz = e.z;
-        const vx = tx - x, vy = ty - y, vz = tz - z;
-        const vl = Math.hypot(vx, vy, vz) || 1;
-        if (!raycast(world, x, y, z, vx / vl, vy / vl, vz / vl, vl)) seen++;
-      }
-      const impact = (1 - d) * (seen / total);
-      const dmg = Math.floor(((impact * impact + impact) / 2) * 7 * radius + 1);
-      if (e.damage) e.damage(dmg, { type: 'explosion', entity: source });
-      if (e instanceof PrimedTNT === false) {
-        e.vx += (ex / el) * impact;
-        e.vy += (ey / el) * impact;
-        e.vz += (ez / el) * impact;
-      }
-    }
-    // Destroy blocks
-    for (const [bx, by, bz] of affected.values()) {
-      const id = world.getBlock(bx, by, bz);
-      if (id === 0 || BLOCKS[id].hardness < 0) continue;
-      if (id === B.tnt) {
-        world.setBlock(bx, by, bz, 0, 0);
-        this.addEntity(new PrimedTNT(world, bx, by, bz, 10 + Math.floor(Math.random() * 20)));
-        continue;
-      }
-      const meta = world.getMeta(bx, by, bz);
-      world.setBlock(bx, by, bz, 0, 0);
-      if (Math.random() < 1 / power) for (const s of naturalDrops(id, meta)) this.dropItem(bx + 0.5, by + 0.5, bz + 0.5, s);
-    }
-    this.audio.play('explode', { x, y, z, range: 48 });
-    for (let i = 0; i < 40; i++) this.gfx.particles.emit('poof', x + (Math.random() - 0.5) * power * 1.5, y + (Math.random() - 0.5) * power * 1.5, z + (Math.random() - 0.5) * power * 1.5, { size: 0.4 + Math.random() * 0.4, r: 0.85, g: 0.85, b: 0.85 });
-    for (let i = 0; i < 12; i++) this.gfx.particles.emit('flame', x + (Math.random() - 0.5) * 2, y + (Math.random() - 0.5) * 2, z + (Math.random() - 0.5) * 2, { size: 0.3, vy: 0.05 });
+  afterExplosion(x, y, z) {
     if (this.player && Math.hypot(this.player.x - x, this.player.z - z) < 24) this.shake = 1;
   }
 
@@ -594,6 +590,7 @@ class Game {
     const p = this.player;
     void source;
     this.ui.chat(p.lastDeathMessage, '#ffffff');
+    if (this.net) this.net.send({ t: 'death', m: p.lastDeathMessage });
     if (!this.world.rules.keepInventory) {
       for (const list of [p.inventory.slots, p.inventory.armor]) {
         for (let i = 0; i < list.length; i++) {
@@ -838,6 +835,7 @@ class Game {
   }
 
   isPaused() {
+    if (this.net) return false; // the shared world keeps going
     const n = this.ui.screenName;
     return this.state === 'playing' && (n === 'pause' || n === 'options' || n === 'help' || n === 'controls' || n === 'click');
   }
@@ -877,12 +875,16 @@ class Game {
   tick() {
     const world = this.world;
     const p = this.player;
+    const net = this.net;
     world.tickTime();
-    world.runScheduled();
-    const pcx = Math.floor(p.x) >> 4, pcz = Math.floor(p.z) >> 4;
     const sim = Math.min(this.settings.renderDist, 6);
-    world.randomTicks(pcx, pcz, sim);
-    world.tickTiles();
+    if (!net) {
+      // In multiplayer the server runs the world rules.
+      world.runScheduled();
+      const pcx = Math.floor(p.x) >> 4, pcz = Math.floor(p.z) >> 4;
+      world.randomTicks(pcx, pcz, sim);
+      world.tickTiles();
+    }
     p.tick(this.input);
     this.gfx.hand.tick(p);
     if (this.respawnCheck > 0) {
@@ -895,6 +897,10 @@ class Game {
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
       if (e.dead) continue;
+      if (net) {
+        proxyTick(e);
+        continue;
+      }
       if (Math.abs(e.x - p.x) > simR || Math.abs(e.z - p.z) > simR) continue;
       if (!world.isLoadedAt(Math.floor(e.x + 1), Math.floor(e.z + 1)) || !world.isLoadedAt(Math.floor(e.x - 1), Math.floor(e.z - 1))) continue;
       e.tick();
@@ -907,10 +913,11 @@ class Game {
       }
     }
     if (removed) world.entities = list.filter((e) => !e.dead);
-    this.spawner.tick();
+    if (!net) this.spawner.tick();
     this.gfx.particles.tick(world);
     this.ambientTick();
-    if (world.tickCount % 600 === 0) this.saveAll();
+    if (net) net.tick();
+    else if (world.tickCount % 600 === 0) this.saveAll();
   }
 
   ambientTick() {

@@ -197,6 +197,8 @@ export class Player extends Living {
       this.deathTime++;
       return;
     }
+    // In multiplayer the night only passes when everyone sleeps; sneak to get up.
+    if (this.sleeping && this.game.net && input.state.sneak && this.sleepTimer > 10) this.wakeUp(false);
     if (this.sleeping) {
       this.tickSleep();
     }
@@ -866,6 +868,7 @@ export class Player extends Living {
     this.spawn = { x: x + 0.5, y: y + 0.6, z: z + 0.5 };
     this.sleeping = { x, y, z, f: world.getMeta(x, y, z) & 3 };
     this.sleepTimer = 0;
+    if (game.net) game.ui.message('Sneak to get out of bed');
     this.teleport(x + 0.5, y + 0.5625, z + 0.5);
     this.vx = this.vy = this.vz = 0;
   }
@@ -873,7 +876,8 @@ export class Player extends Living {
   tickSleep() {
     this.sleepTimer++;
     this.vx = this.vy = this.vz = 0;
-    if (this.sleepTimer >= 100) {
+    // In multiplayer the server skips the night once everyone is asleep.
+    if (this.sleepTimer >= 100 && !this.game.net) {
       const world = this.world;
       world.time = 0;
       world.day++;
@@ -907,7 +911,8 @@ export class Player extends Living {
 
   // ---------------------------------------------------------------- pickup
   pickupNearby() {
-    if (this.health <= 0 || this.mode === 'spectator') return;
+    // In multiplayer the server decides who picks what up.
+    if (this.health <= 0 || this.mode === 'spectator' || this.game.net) return;
     const box = this.box.grow(1, 0.5, 1);
     for (const e of this.world.entities) {
       if (e.dead || !e.pickup) continue;
@@ -980,7 +985,12 @@ export class Player extends Living {
 }
 
 export function deathMessage(name, source = {}) {
-  const by = source.entity && source.entity.displayName ? source.entity.displayName : null;
+  const e = source.entity;
+  const by = e && e.displayName ? e.displayName : null;
+  if (by && e.isPlayer) {
+    if (source.type === 'arrow') return `${name} was shot by ${by}`;
+    if (source.type === 'player' || source.type === 'mob') return `${name} was slain by ${by}`;
+  }
   switch (source.type) {
     case 'fall': return `${name} hit the ground too hard`;
     case 'lava': return `${name} tried to swim in lava`;
@@ -993,6 +1003,7 @@ export function deathMessage(name, source = {}) {
     case 'explosion': return `${name} was caught in an explosion`;
     case 'arrow': return by ? `${name} was shot by a ${by}` : `${name} was shot`;
     case 'mob': return by ? `${name} was defeated by a ${by}` : `${name} was defeated`;
+    case 'player': return by ? `${name} was slain by ${by}` : `${name} was slain`;
     case 'kill': return `${name} left this world`;
     default: return `${name} died`;
   }

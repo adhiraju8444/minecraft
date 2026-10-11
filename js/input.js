@@ -49,6 +49,7 @@ export class Input {
 
   releaseAll() {
     for (const k of Object.keys(this.state)) this.state[k] = false;
+    if (this.game.ui) this.game.ui.showPlayerList?.(false);
     this.down.clear();
   }
 
@@ -107,6 +108,11 @@ export class Input {
     if (isDown && ['Space', 'F1', 'F2', 'F3', 'F5', 'Tab', 'Slash', 'ArrowUp', 'ArrowDown'].includes(code)) e.preventDefault();
     if (isDown && (e.ctrlKey || e.metaKey) && ['KeyW', 'KeyS', 'KeyD', 'KeyA'].includes(code) && game.state === 'playing') e.preventDefault();
 
+    if (code === K.playerList && game.net) {
+      e.preventDefault();
+      ui.showPlayerList(isDown && game.state === 'playing');
+      if (isDown) return;
+    }
     if (!isDown) {
       this.down.delete(code);
       for (const [a, c] of Object.entries(K)) if (c === code && a in this.state) this.state[a] = false;

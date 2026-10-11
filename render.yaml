@@ -1,0 +1,19 @@
+# Render Blueprint: a web service with a disk so the world survives restarts.
+# (Disks need a paid instance type; without one the world resets on every deploy.)
+services:
+  - type: web
+    name: blockforge
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATA_DIR
+        value: /var/data/world
+      - key: SERVER_NAME
+        value: Blockforge Server
+    disk:
+      name: world
+      mountPath: /var/data
+      sizeGB: 1

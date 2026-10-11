@@ -200,6 +200,7 @@ export class AudioEngine {
   }
 
   blockSound(material, kind, x, y, z) {
+    if (this.tap) this.tap('@' + material + ':' + kind, { x, y, z }); // multiplayer: share with others
     if (!this.ctx) return;
     const m = MAT[material] || MAT.stone;
     const vol = kind === 'step' ? 0.22 : kind === 'hit' ? 0.3 : kind === 'place' ? 0.75 : 0.9;
@@ -220,6 +221,7 @@ export class AudioEngine {
   }
 
   play(name, opts = {}) {
+    if (this.tap) this.tap(name, opts); // multiplayer: share with others
     if (!this.ctx) return;
     const p = opts.pitch || 1;
     const S = (vol) => this.spatial(opts, vol);

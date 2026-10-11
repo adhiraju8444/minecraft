@@ -1,11 +1,20 @@
 {
   "name": "blockforge",
   "version": "1.0.0",
-  "description": "A voxel survival sandbox game that runs in the browser.",
+  "description": "A voxel survival sandbox game that runs in the browser, with a built-in multiplayer server.",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "npx --yes http-server -c-1 -p 8080 .",
-    "test": "node tools/test-browser.mjs"
+    "start": "node server/server.js",
+    "static": "npx --yes http-server -c-1 -p 8080 .",
+    "test": "node tools/test-browser.mjs",
+    "test:server": "node tools/test-server.mjs",
+    "test:multiplayer": "node tools/test-multiplayer.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

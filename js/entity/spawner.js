@@ -35,18 +35,28 @@ export class Spawner {
   tick() {
     const game = this.game;
     const world = game.world;
-    const p = game.player;
-    if (!p) return;
-    // Despawning
+    const players = game.players.filter((p) => p && !p.dead);
+    if (!players.length) return;
+    // Despawning, measured from the nearest player
     for (const e of world.entities) {
       if (!(e instanceof Mob) || e.dead || e.persistent) continue;
-      const d = Math.hypot(e.x - p.x, e.z - p.z);
+      const p = game.nearestPlayer(e.x, e.y, e.z);
+      const d = p ? Math.hypot(e.x - p.x, e.z - p.z) : Infinity;
       if (d > 128) e.remove();
       else if (d > 32 && Math.random() < 1 / 800) e.remove();
     }
     if (!world.rules.doMobSpawning) return;
-    if (world.tickCount % 20 === 0 && game.difficulty > 0) this.spawnHostile(world, p);
-    if (world.tickCount % 400 === 0) this.spawnPassive(world, p);
+    for (const p of players) {
+      if (p.mode === 'spectator') continue;
+      if (world.tickCount % 20 === 0 && game.difficulty > 0) this.spawnHostile(world, p);
+      if (world.tickCount % 400 === 0) this.spawnPassive(world, p);
+    }
+  }
+
+  // Far enough from every player to spawn there?
+  clearOfPlayers(x, y, z, min) {
+    const p = this.game.nearestPlayer(x, y, z, min);
+    return !p;
   }
 
   count(world, p, hostile) {
@@ -72,8 +82,7 @@ export class Spawner {
         const sx = x + Math.floor(Math.random() * 5) - 2, sz = z + Math.floor(Math.random() * 5) - 2;
         if (!canSpawnAt(world, sx, y, sz, size[0], size[1])) continue;
         if (world.lightAt(sx, y, sz) > 7) continue;
-        const d = Math.hypot(sx + 0.5 - p.x, y - p.y, sz + 0.5 - p.z);
-        if (d < 24) continue;
+        if (!this.clearOfPlayers(sx + 0.5, y, sz + 0.5, 24)) continue;
         this.game.addEntity(new Mob(world, type, sx + 0.5, y, sz + 0.5));
         spawned++;
       }
@@ -99,6 +108,7 @@ export class Spawner {
       const sy = world.topY(sx, sz) + 1;
       if (world.getBlock(sx, sy - 1, sz) !== B.grass_block) continue;
       if (!canSpawnAt(world, sx, sy, sz, 0.9, 1.4)) continue;
+      if (!this.clearOfPlayers(sx + 0.5, sy, sz + 0.5, 24)) continue;
       this.game.addEntity(new Mob(world, type, sx + 0.5, sy, sz + 0.5, { wool: randomWool() }));
     }
   }

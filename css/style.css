@@ -130,7 +130,7 @@ img, .icon { image-rendering: pixelated; }
 
 .field { display: flex; flex-direction: column; gap: calc(var(--gs) * 2); }
 .field label { font-size: calc(var(--gs) * 6); color: var(--ink-dim); }
-.field input[type=text] {
+.field input[type=text], .field input[type=password] {
   font-family: var(--font);
   font-size: calc(var(--gs) * 8);
   background: #050506;
@@ -141,7 +141,7 @@ img, .icon { image-rendering: pixelated; }
   user-select: text;
   -webkit-user-select: text;
 }
-.field input[type=text]:focus { border-color: var(--accent); }
+.field input[type=text]:focus, .field input[type=password]:focus { border-color: var(--accent); }
 .field .hint { font-size: calc(var(--gs) * 5.5); color: var(--ink-dim); }
 
 .options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--gs) * 4); width: min(calc(var(--gs) * 310), 94vw); }
@@ -307,3 +307,12 @@ img, .icon { image-rendering: pixelated; }
 .touch .tbtn { position: absolute; width: 64px; height: 64px; border-radius: 12px; background: rgba(30, 32, 38, 0.55); border: 2px solid rgba(255, 255, 255, 0.28); color: #fff; display: flex; align-items: center; justify-content: center; font-family: var(--font); font-size: 14px; pointer-events: auto; }
 .touch .tbtn.on { background: rgba(240, 166, 64, 0.5); }
 .touch .tbtn.small { width: 48px; height: 40px; font-size: 12px; }
+
+/* Multiplayer */
+.mp-help { text-align: center; line-height: 1.5; margin-top: calc(var(--gs) * 2); }
+.player-list { position: absolute; top: calc(env(safe-area-inset-top, 0px) + var(--gs) * 12); left: 50%; transform: translateX(-50%); min-width: min(calc(var(--gs) * 160), 90vw); max-width: 94vw; padding: calc(var(--gs) * 4) calc(var(--gs) * 6); display: grid; gap: calc(var(--gs) * 2); font-size: calc(var(--gs) * 7); background: rgba(10, 10, 14, 0.78); }
+.player-list .pl-title { text-align: center; color: var(--ink-dim); margin-bottom: calc(var(--gs) * 2); }
+.player-list .pl-row { display: flex; justify-content: space-between; gap: calc(var(--gs) * 10); }
+.player-list .pl-name.spec { color: var(--ink-dim); font-style: italic; }
+.player-list .pl-op { color: #ffe14d; }
+.player-list .pl-ping { color: #7ddc6b; letter-spacing: -0.05em; font-size: calc(var(--gs) * 6); }

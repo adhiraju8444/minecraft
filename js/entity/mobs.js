@@ -111,8 +111,8 @@ export class Mob extends Living {
   ambient() {
     if (--this.ambientTimer > 0) return;
     this.ambientTimer = rnd(120, 400);
-    const p = this.game.player;
-    if (p && this.distanceTo(p) < 24) this.game.audio.play(this.def.sound + '_say', { x: this.x, y: this.y + this.h * 0.8, z: this.z, pitch: this.baby ? 1.4 : 1 });
+    const p = this.game.nearestPlayer(this.x, this.y, this.z, 24);
+    if (p) this.game.audio.play(this.def.sound + '_say', { x: this.x, y: this.y + this.h * 0.8, z: this.z, pitch: this.baby ? 1.4 : 1 });
   }
 
   canSee(e) {
@@ -127,8 +127,8 @@ export class Mob extends Living {
 
   // ---------------------------------------------------------------- AI
   ai() {
-    const p = this.game.player;
-    const valid = p && p.alive && p.mode === 'survival';
+    const game = this.game;
+    const isTarget = (q) => q.alive && q.mode === 'survival';
     this.moveForward = 0;
     this.jumping = false;
     this.lookTarget = null;
@@ -139,9 +139,12 @@ export class Mob extends Living {
         const light = this.world.lightAt(Math.floor(this.x), Math.floor(this.y + 0.5), Math.floor(this.z));
         aggressive = light < 8 || this.provoked > 0;
       }
-      if (valid && aggressive && this.game.difficulty > 0) {
+      // Keep chasing the current target while it stays valid; otherwise pick the nearest player.
+      if (this.target && (!isTarget(this.target) || this.target.dead || this.distanceTo(this.target) > this.def.range * 1.2 || !game.players.includes(this.target))) this.target = null;
+      const p = this.target || game.nearestPlayer(this.x, this.y, this.z, this.def.range, isTarget);
+      if (p && aggressive && game.difficulty > 0) {
         const d = this.distanceTo(p);
-        if (d < this.def.range && (d < 6 || (this.age % 10 === 0 ? (this.seen = this.canSee(p)) : this.seen))) this.target = p;
+        if (d < this.def.range && (d < 6 || this.target === p || (this.age % 10 === 0 ? (this.seen = this.canSee(p)) : this.seen))) this.target = p;
         else if (d > this.def.range * 1.2) this.target = null;
       } else this.target = null;
       if (this.target) {
@@ -173,9 +176,13 @@ export class Mob extends Living {
       }
     }
     // Tempted by food
-    if (valid || (p && p.alive && p.mode === 'creative')) {
-      const held = p.inventory.selectedStack();
-      if (held && this.def.food.includes(ITEMS[held.id].name) && this.distanceTo(p) < 10 && this.breedCooldown === 0) {
+    if (this.breedCooldown === 0) {
+      const p = game.nearestPlayer(this.x, this.y, this.z, 10, (q) => {
+        if (!q.alive || q.mode === 'spectator') return false;
+        const held = q.inventory.selectedStack();
+        return !!held && !!ITEMS[held.id] && this.def.food.includes(ITEMS[held.id].name);
+      });
+      if (p) {
         this.lookTarget = p;
         if (this.distanceTo(p) > 2.2) {
           this.navigateTo(p.x, p.y, p.z, 1.6, 20);
@@ -201,7 +208,8 @@ export class Mob extends Living {
       this.eatingGrass--;
       return;
     }
-    if (p && this.distanceTo(p) < 6 && Math.random() < 0.6) this.lookTarget = p;
+    const near = game.nearestPlayer(this.x, this.y, this.z, 6);
+    if (near && Math.random() < 0.6) this.lookTarget = near;
     this.wanderAI(1);
   }
 
@@ -307,8 +315,8 @@ export class Mob extends Living {
     if (hd < reach && Math.abs(t.y + t.h / 2 - (this.y + this.h / 2)) < 1.6 && this.attackCooldown === 0) {
       this.attackCooldown = 20;
       this.swingTicks = 8;
-      const diff = this.game.difficulty;
-      const dmg = this.def.attack[Math.max(0, Math.min(2, diff - 1))];
+      // Normal-difficulty damage; the player's damage() scales it for easy and hard.
+      const dmg = this.def.attack[1];
       if (t.damage(dmg, { type: 'mob', entity: this })) {
         t.knockback(this.x, this.z, 0.4);
       }

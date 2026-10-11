@@ -14,7 +14,8 @@ export class Chunk {
     // neighbours: +x, -x, +z, -z
     this.nb = [null, null, null, null];
     this.lit = false;
-    this.modified = false;
+    this.modified = false; // needs saving
+    this.changed = !!data.changed; // differs from freshly generated terrain
     this.tileEntities = new Map();
     this.sections = [];
     for (let s = 0; s < SECTIONS; s++) this.sections.push({ dirty: true, opaque: null, trans: null, built: false });
