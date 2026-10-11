@@ -2,7 +2,7 @@
 // keeps a stand-in ("proxy") for each one: the normal entity class for
 // drawing, moved smoothly toward the positions the server sends.
 import * as THREE from '../../vendor/three.module.min.js';
-import { Mob } from '../entity/mobs.js';
+import { Mob, MOB_TYPES } from '../entity/mobs.js';
 import { ItemEntity, XPOrb, FallingBlock, PrimedTNT, Projectile } from '../entity/objects.js';
 import { Player } from '../game/player.js';
 import { ITEMS } from '../data/items.js';
@@ -10,12 +10,15 @@ import { MF, PF } from './protocol.js';
 
 const LERP_TICKS = 3;
 
+const TAU = Math.PI * 2;
 function angleDiff(a, b) {
-  let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  let d = (a - b) % TAU;
+  if (!Number.isFinite(d)) return 0;
+  if (d > Math.PI) d -= TAU;
+  else if (d < -Math.PI) d += TAU;
   return d;
 }
+const finite = (st) => Array.isArray(st) && st.every((v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 1e8);
 
 // ---------------------------------------------------------------- other players
 export class PlayerView extends Player {
@@ -127,11 +130,12 @@ function makeNameTag(name) {
 // s = spawn record from the server: { i: id, k: kind, st: state, ... }
 export function createProxy(world, s, net) {
   const st = s.st;
-  if (!Array.isArray(st)) return null;
+  if (!finite(st) || st.length < 3) return null;
   const [x, y, z] = st;
   let e = null;
   switch (s.k) {
     case 'm': {
+      if (typeof s.ty !== 'string' || !Object.prototype.hasOwnProperty.call(MOB_TYPES, s.ty)) return null;
       const f = st[7] | 0;
       e = new Mob(world, s.ty, x, y, z, { baby: !!(f & MF.BABY), sheared: !!(f & MF.SHEARED), wool: st[8] | 0, health: st[6], yaw: st[3] });
       if (!e.def) return null;
@@ -185,6 +189,7 @@ export function createProxy(world, s, net) {
 
 // Latest state from the server.
 export function applyState(e, st, first = false) {
+  if (!finite(st)) return;
   if (!first) {
     e.tx = st[0];
     e.ty = st[1];
@@ -262,6 +267,7 @@ export function proxyTick(e) {
     if (e.tyaw !== undefined) e.yaw += angleDiff(e.tyaw, e.yaw) / n;
     if (e.tpitch !== undefined) e.pitch += (e.tpitch - e.pitch) / n;
   }
+  if (e.localInvuln > 0) e.localInvuln--;
   if (e instanceof Mob || e instanceof PlayerView) {
     e.pLimbAmount = e.limbAmount;
     let dist = Math.hypot(e.x - e.px, e.z - e.pz) * 4;

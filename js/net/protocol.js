@@ -102,6 +102,12 @@ export function cleanName(name) {
   return n;
 }
 
+// One identity per name: case, spaces and underscores do not matter
+// ("Bob Smith", "bob_smith" and "BOB  SMITH" are the same player).
+export function nameKey(name) {
+  return String(name).toLowerCase().trim().replace(/[ _]+/g, '_');
+}
+
 export function cleanText(text, max = 200) {
   if (typeof text !== 'string') return '';
   // Strip control characters and trim.

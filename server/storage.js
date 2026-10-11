@@ -11,7 +11,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';
 import { chunkKey } from '../js/world/constants.js';
-import { encodeDiskChunk, decodeDiskChunk } from '../js/net/protocol.js';
+import { encodeDiskChunk, decodeDiskChunk, nameKey } from '../js/net/protocol.js';
 
 const region = (c) => c >> 5;
 const deflate = promisify(zlib.deflate);
@@ -22,7 +22,14 @@ export class Storage {
     this.chunkDir = path.join(this.dir, 'chunks');
     this.entityDir = path.join(this.dir, 'entities');
     this.playerDir = path.join(this.dir, 'players');
-    for (const d of [this.dir, this.chunkDir, this.entityDir, this.playerDir]) fs.mkdirSync(d, { recursive: true });
+    try {
+      for (const d of [this.dir, this.chunkDir, this.entityDir, this.playerDir]) fs.mkdirSync(d, { recursive: true });
+      const probe = path.join(this.dir, '.write-test');
+      fs.writeFileSync(probe, 'ok');
+      fs.rmSync(probe);
+    } catch (e) {
+      throw new Error(`The server cannot save the world in ${this.dir} (${e.code || e.message}). Make that folder writable or point DATA_DIR somewhere else. On Railway, add the variable RAILWAY_RUN_UID=0.`);
+    }
     // Files queued or being written, so reads always see the newest data.
     this.pending = new Map();
     this.chain = Promise.resolve();
@@ -37,8 +44,8 @@ export class Storage {
   }
 
   playerPath(name) {
-    // Names are limited to [A-Za-z0-9_ -]; spaces become underscores on disk.
-    return path.join(this.playerDir, name.toLowerCase().replace(/ /g, '_') + '.json');
+    // Names are limited to [A-Za-z0-9_ -], so the key is a safe file name.
+    return path.join(this.playerDir, nameKey(name) + '.json');
   }
 
   // Keys of every stored chunk and entity record.
@@ -162,6 +169,14 @@ export class Storage {
     const data = JSON.stringify(level, null, 2);
     const file = path.join(this.dir, 'level.json');
     return sync ? this.writeSync(file, data) : this.write(file, data);
+  }
+
+  hasPlayers() {
+    try {
+      return fs.readdirSync(this.playerDir).some((f) => f.endsWith('.json'));
+    } catch {
+      return false;
+    }
   }
 
   loadPlayer(name) {

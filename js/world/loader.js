@@ -92,6 +92,17 @@ export class ChunkLoader {
     this.arrived.push({ data: { cx, cz, ...data }, fromSave: true, fromNet: true });
   }
 
+  // A block change for a chunk that has arrived but is not in the world yet.
+  patchArrived(x, y, z, id, meta) {
+    const cx = x >> 4, cz = z >> 4;
+    for (const a of this.arrived) {
+      if (a.data.cx !== cx || a.data.cz !== cz || !a.fromNet) continue;
+      const i = (x & 15) | ((z & 15) << 4) | (y << 8);
+      a.data.blocks[i] = id;
+      a.data.meta[i] = meta;
+    }
+  }
+
   // The server has nothing stored for this chunk: generate it here.
   receiveGenerate(key) {
     if (!this.netWait.delete(key) || this.destroyed) return;

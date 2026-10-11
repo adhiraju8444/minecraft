@@ -89,12 +89,12 @@ export class RemotePlayer extends Entity {
     if (!Array.isArray(s) || s.length < 14) return false;
     for (let i = 0; i < 14; i++) if (!isNum(s[i])) return false;
     const [x, y, z, yaw, pitch, flags, health] = s;
-    if (Math.abs(x) > 3e7 || Math.abs(z) > 3e7 || y < -256 || y > 512) return false;
+    if (Math.abs(x) > 3e7 || Math.abs(z) > 3e7 || y < -256 || y > 512 || Math.abs(yaw) > 1e4) return false;
     this.px = this.x;
     this.py = this.y;
     this.pz = this.z;
     this.setPos(x, y, z);
-    this.yaw = yaw;
+    this.yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw)); // keep it in -pi..pi
     this.pitch = Math.max(-1.6, Math.min(1.6, pitch));
     this.flags = flags | 0;
     this.sneaking = !!(flags & PF.SNEAK);
@@ -108,20 +108,14 @@ export class RemotePlayer extends Entity {
     return true;
   }
 
-  // Full player record (inventory, hunger, xp...) the browser sends now and then.
+  // Full player record (inventory, hunger, xp...) the browser sends now and
+  // then. Only known fields of the right types are kept, so whatever a client
+  // sends can always be saved and loaded again.
   applyData(d) {
-    if (!d || typeof d !== 'object' || Array.isArray(d)) return;
-    this.data = d;
-    const inv = d.inventory;
-    if (inv && Array.isArray(inv.slots)) {
-      // Stacks arrive as [name, count, damage]; anything malformed counts as empty.
-      const clean = (a) => (Array.isArray(a) && typeof a[0] === 'string' && Number.isInteger(a[1]) && a[1] > 0 ? [a[0], Math.min(a[1], 64), Number.isInteger(a[2]) && a[2] > 0 ? a[2] : 0] : null);
-      Inventory.prototype.load.call(this.inventory, {
-        slots: inv.slots.slice(0, 36).map(clean),
-        armor: (Array.isArray(inv.armor) ? inv.armor : []).slice(0, 4).map(clean),
-        selected: Number.isInteger(inv.selected) && inv.selected >= 0 && inv.selected < 9 ? inv.selected : 0,
-      });
-    }
+    const clean = sanitizePlayerData(d);
+    if (!clean) return;
+    this.data = clean;
+    Inventory.prototype.load.call(this.inventory, clean.inventory);
   }
 
   // ------------------------------------------------------------ the world acting on the player
@@ -161,17 +155,18 @@ export class RemotePlayer extends Entity {
 
   heal() {}
 
-  // Held-item effects of using things on animals.
+  // Held-item effects of using things on animals. `useStack` is the item the
+  // player used, so the browser changes that item even if the hotbar moved.
   consumeSelected(n) {
-    if (this.mode !== 'creative') this.send({ t: 'held', op: 'consume', n });
+    if (this.mode !== 'creative') this.send({ t: 'held', op: 'consume', n, id: this.useStack?.id });
   }
 
   damageHeld(n) {
-    if (this.mode === 'survival') this.send({ t: 'held', op: 'damage', n });
+    if (this.mode === 'survival') this.send({ t: 'held', op: 'damage', n, id: this.useStack?.id });
   }
 
   exchangeHeld(name) {
-    this.send({ t: 'held', op: 'exchange', item: name });
+    this.send({ t: 'held', op: 'exchange', item: name, id: this.useStack?.id });
   }
 
   swing() {}
@@ -190,6 +185,36 @@ export class RemotePlayer extends Entity {
   viewState() {
     return [round2(this.x), round2(this.y), round2(this.z), round2(this.yaw), round2(this.pitch), this.flags, this.held, ...this.armorIds, this.swingCount, this.sleeping ? this.sleeping.f + 1 : 0];
   }
+}
+
+const NUM_FIELDS = ['x', 'y', 'z', 'yaw', 'pitch', 'health', 'food', 'saturation', 'exhaustion', 'xpLevel', 'xpProgress', 'xpTotal', 'score', 'air', 'fireTicks'];
+
+function cleanStack(a) {
+  if (!Array.isArray(a) || typeof a[0] !== 'string' || a[0].length > 40 || !Number.isInteger(a[1]) || a[1] < 1) return null;
+  return [a[0], Math.min(a[1], 64), Number.isInteger(a[2]) && a[2] > 0 ? Math.min(a[2], 100000) : 0];
+}
+
+export function sanitizePlayerData(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  const out = {};
+  for (const k of NUM_FIELDS) if (Number.isFinite(d[k])) out[k] = Math.max(-3e7, Math.min(3e7, d[k]));
+  if (Number.isFinite(out.yaw)) out.yaw = Math.atan2(Math.sin(out.yaw), Math.cos(out.yaw));
+  out.flying = d.flying === true;
+  const sp = d.spawn;
+  out.spawn = sp && typeof sp === 'object' && [sp.x, sp.y, sp.z].every(Number.isFinite) ? { x: sp.x, y: sp.y, z: sp.z } : null;
+  out.effects = {};
+  if (d.effects && typeof d.effects === 'object' && !Array.isArray(d.effects)) {
+    for (const [k, v] of Object.entries(d.effects).slice(0, 16)) if (/^[a-z_]{1,24}$/.test(k) && Number.isFinite(v)) out.effects[k] = Math.max(0, Math.min(1e6, v));
+  }
+  const inv = d.inventory && typeof d.inventory === 'object' ? d.inventory : {};
+  const slots = Array.isArray(inv.slots) ? inv.slots.slice(0, 36) : [];
+  const armor = Array.isArray(inv.armor) ? inv.armor.slice(0, 4) : [];
+  out.inventory = {
+    slots: Array.from({ length: 36 }, (_, i) => cleanStack(slots[i])),
+    armor: Array.from({ length: 4 }, (_, i) => cleanStack(armor[i])),
+    selected: Number.isInteger(inv.selected) && inv.selected >= 0 && inv.selected < 9 ? inv.selected : 0,
+  };
+  return out;
 }
 
 export { serializeStack, deserializeStack };

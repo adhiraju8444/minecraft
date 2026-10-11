@@ -67,9 +67,9 @@ export class WorldGen {
     const hills = smooth(0.4, -0.5, e);
     h += d * (2.5 + 9 * hills);
     const m = smooth(0.02, 0.3, c) * smooth(-0.05, -0.5, e);
-    // pk^1.5 via sqrt: sqrt is exactly rounded everywhere, so every browser and the
-    // server generate identical terrain from the same seed.
-    h += m * pk * Math.sqrt(pk) * 64;
+    // The only non-exact maths in terrain generation. Engines agree on pow to
+    // within the last bit, which practically never moves a block height.
+    h += m * Math.pow(pk, 1.6) * 64;
     const rv = Math.abs(this.nRiver.fbm2(x / 560, z / 560, 3));
     let river = 0;
     if (c > -0.12) {

@@ -19,12 +19,15 @@ import { chunkKey, SEA_LEVEL, DAY_LENGTH } from '../js/world/constants.js';
 import { BLOCKS, isSolid } from '../js/data/blocks.js';
 import { ITEMS, maxStack } from '../js/data/items.js';
 import { seedFromInput } from '../js/util/rng.js';
-import { PROTOCOL, MF, MODES, round2, encodeChunkPayload, CHUNK_PAYLOAD_SIZE, isNum, clampInt, cleanName, cleanText } from '../js/net/protocol.js';
+import { PROTOCOL, MF, MODES, round2, encodeChunkPayload, CHUNK_PAYLOAD_SIZE, isNum, clampInt, cleanName, cleanText, nameKey } from '../js/net/protocol.js';
 import { GenPool } from './genpool.js';
-import { RemotePlayer } from './remote-player.js';
+import { RemotePlayer, sanitizePlayerData } from './remote-player.js';
 import { ServerCommands } from './commands.js';
 
 const ENTITY_RANGE = 96; // blocks; entities further away are not sent
+const MAX_ENTITIES = 4000; // no more player-made entities beyond this many in the world
+const MAX_OWN_ENTITIES = 400; // items, xp, arrows and TNT one player has made that still exist
+const MAX_OWN_MOBS = 40; // creatures one creative player has spawned that are still alive
 const EFFECT_RANGE = 32;
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -70,6 +73,8 @@ class NetParticles {
   add() {}
 }
 
+const sameKind = (a, b) => a.id === b.id && (a.dmg || 0) === (b.dmg || 0);
+
 function parseStack(a) {
   if (!Array.isArray(a)) return null;
   const [id, count, dmg] = a;
@@ -100,6 +105,7 @@ export class ServerGame extends GameCore {
     this.tileEditor = null;
     this.stopped = false;
     this.tickNo = 0; // server ticks (the world clock pauses while nobody plays)
+    this.pendingEdits = new Map(); // chunk key -> block edits waiting for that chunk to load
   }
 
   get players() {
@@ -125,9 +131,11 @@ export class ServerGame extends GameCore {
     this.entityRecords = scan.entities;
     this.gen = new GenPool(level.seed);
     if (!level.spawn) level.spawn = this.findSpawn();
-    this.ops = new Set(this.storage.loadList('ops').map((n) => String(n).toLowerCase()));
-    for (const n of cfg.ops) this.ops.add(n.toLowerCase());
-    this.bans = new Set(this.storage.loadList('banned-players').map((n) => String(n).toLowerCase()));
+    this.ops = new Set(this.storage.loadList('ops').map(nameKey));
+    for (const n of cfg.ops) this.ops.add(nameKey(n));
+    this.bans = new Set(this.storage.loadList('banned-players').map(nameKey));
+    // The first player becomes an operator only once per world.
+    if (level.autoOpDone === undefined) level.autoOpDone = this.ops.size > 0 || this.storage.hasPlayers();
     this.ipBans = new Set(this.storage.loadList('banned-ips').map(String));
     this.commands = new ServerCommands(this);
     this.spawner = new Spawner(this);
@@ -157,15 +165,15 @@ export class ServerGame extends GameCore {
   }
 
   isOp(name) {
-    return this.ops.has(name.toLowerCase());
+    return this.ops.has(nameKey(name));
   }
 
   setOp(name, on) {
-    const lower = name.toLowerCase();
-    if (on) this.ops.add(lower);
-    else this.ops.delete(lower);
+    const key = nameKey(name);
+    if (on) this.ops.add(key);
+    else this.ops.delete(key);
     this.storage.saveList('ops', [...this.ops]);
-    const p = this.online.get(lower);
+    const p = this.online.get(key);
     if (p) {
       p.op = on;
       p.send({ t: 'op', on });
@@ -182,7 +190,7 @@ export class ServerGame extends GameCore {
     if (m.v !== PROTOCOL) return conn.kick('This server runs a different version of the game. Refresh the page to update.');
     const name = cleanName(m.name);
     if (!name) return conn.kick('Pick a name with 1 to 16 letters, numbers, spaces, - or _');
-    const lower = name.toLowerCase();
+    const lower = nameKey(name);
     if (cfg.password && m.pw !== cfg.password) return conn.kick('Wrong server password');
     if (this.bans.has(lower) || this.ipBans.has(conn.ip)) return conn.kick('You are banned from this server');
     if (typeof m.key !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(m.key)) return conn.kick('Your browser did not send a player key. Refresh the page and try again.');
@@ -191,7 +199,7 @@ export class ServerGame extends GameCore {
     if (existing) {
       if (existing.keyHash !== keyHash) return conn.kick(`"${name}" is already playing on this server`);
       // Same player in a new tab: save the old session first so nothing is lost.
-      this.savePlayer(existing, true);
+      this.trySavePlayer(existing, true);
       existing.conn.kick('You joined from another tab or device');
       this.online.delete(lower);
     }
@@ -205,19 +213,23 @@ export class ServerGame extends GameCore {
     p.keyHash = keyHash;
     p.record = record || { name, keyHash, firstJoined: Date.now() };
     p.mode = record && MODES.includes(record.mode) ? record.mode : this.level.gamemode || 'survival';
-    if (!this.isOp(name) && this.ops.size === 0 && cfg.autoOp) {
-      this.setOp(name, true);
-      console.log(`[ops] ${name} is the first player, so they are now an operator (admin). Use "deop ${name}" in this console to undo.`);
+    if (!this.level.autoOpDone) {
+      this.level.autoOpDone = true;
+      if (cfg.autoOp && this.ops.size === 0) {
+        this.setOp(name, true);
+        console.log(`[ops] ${name} is the first player, so they are now an operator (admin). Use "deop ${name}" in this console to undo; nobody else becomes one automatically.`);
+      }
+      this.storage.saveLevel(this.levelRecord());
     }
     p.op = this.isOp(name);
-    const d = record && record.data && typeof record.data === 'object' ? record.data : null;
+    const d = record ? sanitizePlayerData(record.data) : null;
     if (d) p.applyData(d);
     const sp = this.level.spawn;
     const pos = d && [d.x, d.y, d.z].every(isNum) ? [d.x, d.y, d.z] : [sp.x, sp.y, sp.z];
     p.setPos(pos[0], pos[1], pos[2]);
     p.health = d && isNum(d.health) && d.health > 0 ? d.health : 20;
     conn.player = p;
-    conn.vd = Math.min(cfg.viewDistance, clampInt(m.vd, 2, 32) ?? 8);
+    this.setViewDistance(conn, m.vd);
     this.online.set(lower, p);
     const w = this.world;
     conn.send({
@@ -232,14 +244,26 @@ export class ServerGame extends GameCore {
     console.log(`[join] ${name} connected from ${conn.ip}${record ? '' : ' (new player)'}`);
   }
 
+  // The browser's render distance decides which block changes it needs (it
+  // loads those chunks itself); entities are only sent within VIEW_DISTANCE.
+  setViewDistance(conn, vd) {
+    const v = clampInt(vd, 2, 32) ?? conn.loadVd ?? 8;
+    conn.loadVd = v;
+    conn.vd = Math.min(this.cfg.viewDistance, v);
+  }
+
+  get pvp() {
+    return this.cfg.pvp;
+  }
+
   leave(conn) {
     this.clients.delete(conn);
     const p = conn.player;
     if (!p) return;
     conn.player = null;
-    if (this.online.get(p.name.toLowerCase()) === p) this.online.delete(p.name.toLowerCase());
+    if (this.online.get(nameKey(p.name)) === p) this.online.delete(nameKey(p.name));
     p.dead = true;
-    this.savePlayer(p);
+    this.trySavePlayer(p);
     const wasReady = p.ready;
     p.ready = false;
     this.refreshPlayers();
@@ -277,6 +301,16 @@ export class ServerGame extends GameCore {
     return this.storage.savePlayer(p.name, rec, sync);
   }
 
+  // Saving one player must never stop the others (or the world) from saving.
+  trySavePlayer(p, sync = false) {
+    try {
+      return this.savePlayer(p, sync);
+    } catch (e) {
+      console.error(`[save] could not save player ${p.name}: ${e.message}`);
+      return null;
+    }
+  }
+
   broadcast(m, except = null) {
     for (const c of this.clients) if (c !== except && c.player) c.send(m);
   }
@@ -286,9 +320,10 @@ export class ServerGame extends GameCore {
   }
 
   findPlayer(name) {
-    const n = String(name || '').toLowerCase();
+    const n = nameKey(name || '');
+    if (!n) return null;
     if (this.online.has(n)) return this.online.get(n);
-    const matches = [...this.online.values()].filter((p) => p.name.toLowerCase().startsWith(n));
+    const matches = [...this.online.values()].filter((p) => nameKey(p.name).startsWith(n));
     return matches.length === 1 ? matches[0] : null;
   }
 
@@ -342,13 +377,15 @@ export class ServerGame extends GameCore {
         return this.onRelayFx(conn, p, m.bb);
       case 'death':
         if (conn.allow('chat')) {
-          const text = cleanText(m.m, 200) || `${p.name} died`;
+          // Death messages always start with the player's own name.
+          const t = cleanText(m.m, 200);
+          const text = t.startsWith(p.name + ' ') ? t : `${p.name} died`;
           console.log(`[death] ${text}`);
           this.broadcastChat(text, null, conn);
         }
         return;
       case 'vd':
-        conn.vd = Math.min(this.cfg.viewDistance, clampInt(m.vd, 2, 32) ?? conn.vd);
+        this.setViewDistance(conn, m.vd);
         return;
       default:
     }
@@ -360,7 +397,16 @@ export class ServerGame extends GameCore {
     if (x === null || y === null || z === null || id === null || meta === null) return;
     const world = this.world;
     const cur = world.getBlock(x, y, z);
-    if (cur === 255) return;
+    if (cur === 255) {
+      // That chunk is still loading here (e.g. right after a teleport): apply the edit once it arrives.
+      const key = chunkKey(x >> 4, z >> 4);
+      const list = this.pendingEdits.get(key) || [];
+      if (list.length < 64 && this.pendingEdits.size < 256) {
+        list.push([conn, m]);
+        this.pendingEdits.set(key, list);
+      }
+      return;
+    }
     const reach = p.mode === 'creative' ? 12 : 10;
     const ok = p.alive && p.mode !== 'spectator' && (id === 0 || BLOCKS[id]) && near(p, x + 0.5, y + 0.5, z + 0.5, reach) && conn.allow('set');
     if (!ok) {
@@ -374,6 +420,10 @@ export class ServerGame extends GameCore {
   onSpawn(conn, p, e) {
     if (!e || typeof e !== 'object' || !p.alive || p.mode === 'spectator') return;
     if (!conn.allow('spawn')) return;
+    // Limits on how much one player (and everyone) can keep in the world.
+    if (this.world.entities.length >= MAX_ENTITIES) return;
+    const mine = this.ownedCount(p, e.k === 'm');
+    if (mine >= (e.k === 'm' ? MAX_OWN_MOBS : MAX_OWN_ENTITIES)) return;
     const pos = Array.isArray(e.p) ? e.p : null;
     if (!pos || pos.length !== 3 || !pos.every(isNum) || !near(p, pos[0], pos[1], pos[2], 10)) return;
     const vel = Array.isArray(e.v) && e.v.length === 3 && e.v.every(isNum) ? e.v.map((v) => Math.max(-4, Math.min(4, v))) : [0, 0, 0];
@@ -383,7 +433,8 @@ export class ServerGame extends GameCore {
       case 'i': {
         const s = parseStack(e.s);
         if (!s) return;
-        this.dropItemWithVelocity(x, y, z, s, vel[0], vel[1], vel[2], clampInt(e.d, 0, 200) ?? 10);
+        const it = this.dropItemWithVelocity(x, y, z, s, vel[0], vel[1], vel[2], clampInt(e.d, 0, 200) ?? 10);
+        if (it) it.owner = p;
         return;
       }
       case 'x': {
@@ -391,26 +442,34 @@ export class ServerGame extends GameCore {
         if (n === null) return;
         const orb = new XPOrb(world, x, y, z, n);
         [orb.vx, orb.vy, orb.vz] = vel;
+        orb.owner = p;
         this.addEntity(orb);
         return;
       }
       case 'p': {
         if (!['arrow', 'snowball', 'egg'].includes(e.kind)) return;
-        this.spawnProjectile(p, x, y, z, vel[0], vel[1], vel[2], e.kind, !!e.c);
+        this.spawnProjectile(p, x, y, z, vel[0], vel[1], vel[2], e.kind, !!e.c).owner = p;
         return;
       }
       case 't': {
         const fuse = clampInt(e.f, 1, 200) ?? 80;
-        this.addEntity(new PrimedTNT(world, Math.floor(x), Math.floor(y), Math.floor(z), fuse));
+        this.addEntity(new PrimedTNT(world, Math.floor(x), Math.floor(y), Math.floor(z), fuse)).owner = p;
         return;
       }
       case 'm': {
-        if (p.mode !== 'creative' || !MOB_TYPES[e.ty]) return;
-        this.spawnMob(e.ty, x, y, z, { baby: !!e.b, wool: randomWool() });
+        if (p.mode !== 'creative' || typeof e.ty !== 'string' || !Object.prototype.hasOwnProperty.call(MOB_TYPES, e.ty)) return;
+        const mob = this.spawnMob(e.ty, x, y, z, { baby: !!e.b, wool: randomWool() });
+        if (mob) mob.owner = p;
         return;
       }
       default:
     }
+  }
+
+  ownedCount(p, mobs) {
+    let n = 0;
+    for (const e of this.world.entities) if (e.owner === p && !e.dead && (e instanceof Mob) === mobs) n++;
+    return n;
   }
 
   findEntity(id) {
@@ -441,7 +500,12 @@ export class ServerGame extends GameCore {
     const t = this.findEntity(m.i);
     const s = parseStack(m.s);
     if (!t || !s || t.dead || !t.onInteract || p.distanceTo(t) > 8) return;
-    t.onInteract(p, s);
+    p.useStack = s;
+    try {
+      t.onInteract(p, s);
+    } finally {
+      p.useStack = null;
+    }
   }
 
   onChat(conn, p, m) {
@@ -497,39 +561,81 @@ export class ServerGame extends GameCore {
     const x = clampInt(m.x, -3e7, 3e7), y = clampInt(m.y, 0, 127), z = clampInt(m.z, -3e7, 3e7);
     if (x === null || y === null || z === null) return;
     const te = this.world.getTileEntity(x, y, z);
-    if (!te || !near(p, x + 0.5, y + 0.5, z + 0.5, 10)) return;
+    if (!te || !near(p, x + 0.5, y + 0.5, z + 0.5, 10) || !conn.allow('tile')) return;
     conn.viewing = te;
     this.sendTile(conn, te);
   }
 
+  // Container edits arrive as per-slot changes [slot, before, after] and are
+  // applied as "took N" / "put N" against what the container holds now, so
+  // two players using one chest (or a furnace finishing an item) never
+  // overwrite each other. Whatever cannot be taken or put is settled with the
+  // player ('untake' / 'give'), so items are neither lost nor duplicated.
   onTile(conn, p, m) {
     const x = clampInt(m.x, -3e7, 3e7), y = clampInt(m.y, 0, 127), z = clampInt(m.z, -3e7, 3e7);
     if (x === null || y === null || z === null) return;
     const te = this.world.getTileEntity(x, y, z);
     if (!te) return;
-    if (conn.viewing !== te || !Array.isArray(m.it) || m.it.length !== te.items.length || !conn.allow('tile')) {
+    if (conn.viewing !== te || !Array.isArray(m.ch) || m.ch.length > te.items.length * 2 || !p.alive) {
       this.sendTile(conn, te);
       return;
     }
-    const items = m.it.map(parseStack);
-    if (te.type === 'furnace') {
-      // Experience stored in the furnace goes to whoever takes the output.
-      const before = te.items[2] ? te.items[2].count : 0;
-      const after = items[2] ? items[2].count : 0;
-      if (after < before && te.xp > 0) {
-        let xp = Math.floor(te.xp);
-        if (Math.random() < te.xp - xp) xp++;
-        te.xp = 0;
-        if (xp > 0) this.spawnXP(p.x, p.y + 0.5, p.z, xp);
+    if (!conn.allow('tile')) {
+      conn.tileResync = te;
+      return;
+    }
+    let outputTaken = false;
+    for (const c of m.ch) {
+      if (!Array.isArray(c) || c.length !== 3 || !Number.isInteger(c[0]) || c[0] < 0 || c[0] >= te.items.length) continue;
+      const i = c[0];
+      const from = c[1] === null ? null : parseStack(c[1]);
+      const to = c[2] === null ? null : parseStack(c[2]);
+      if ((c[1] !== null && !from) || (c[2] !== null && !to)) continue;
+      let take = null, put = null;
+      if (from && to && sameKind(from, to)) {
+        const d = to.count - from.count;
+        if (d < 0) take = { ...from, count: -d };
+        else if (d > 0) put = { ...to, count: d };
+      } else {
+        if (from) take = from;
+        if (to) put = to;
+      }
+      if (take) {
+        const cur = te.items[i];
+        const have = cur && sameKind(cur, take) ? cur.count : 0;
+        const got = Math.min(have, take.count);
+        if (got > 0) te.items[i] = cur.count - got > 0 ? { ...cur, count: cur.count - got } : null;
+        if (got < take.count) p.send({ t: 'untake', s: packStack({ ...take, count: take.count - got }) });
+        if (te.type === 'furnace' && i === 2 && got > 0) outputTaken = true;
+      }
+      if (put) {
+        const cur = te.items[i];
+        let placed = 0;
+        if (!cur) {
+          placed = Math.min(put.count, maxStack(put.id));
+          te.items[i] = { ...put, count: placed };
+        } else if (sameKind(cur, put)) {
+          placed = Math.max(0, Math.min(put.count, maxStack(cur.id) - cur.count));
+          if (placed) te.items[i] = { ...cur, count: cur.count + placed };
+        }
+        if (placed < put.count) p.send({ t: 'give', s: serializeStack({ ...put, count: put.count - placed }) });
       }
     }
-    for (let i = 0; i < items.length; i++) te.items[i] = items[i];
+    if (outputTaken && te.xp > 0) {
+      // Experience stored in the furnace goes to whoever takes the output.
+      let xp = Math.floor(te.xp);
+      if (Math.random() < te.xp - xp) xp++;
+      te.xp = 0;
+      if (xp > 0) this.spawnXP(p.x, p.y + 0.5, p.z, xp);
+    }
     this.tileEditor = conn;
     try {
       this.world.markTileDirty(te);
     } finally {
       this.tileEditor = null;
     }
+    // If the editor's view (m.it) differs from what the container really holds now, resend it.
+    if (!Array.isArray(m.it) || JSON.stringify(te.items.map(packStack)) !== JSON.stringify(m.it)) this.sendTile(conn, te);
   }
 
   onTileChange(te) {
@@ -544,6 +650,11 @@ export class ServerGame extends GameCore {
       if (!te) continue;
       if (this.world.getTileEntity(te.x, te.y, te.z) !== te) {
         c.viewing = null;
+        continue;
+      }
+      if (c.tileResync === te) {
+        c.tileResync = null;
+        this.sendTile(c, te);
         continue;
       }
       if (te.type !== 'furnace') continue;
@@ -575,11 +686,18 @@ export class ServerGame extends GameCore {
     for (let i = 0; i + 1 < list.length && i < 128; i += 2) {
       const cx = clampInt(list[i], -32768, 32767), cz = clampInt(list[i + 1], -32768, 32767);
       if (cx === null || cz === null || !conn.allow('req')) continue;
-      if (Math.abs(cx - pcx) > 40 || Math.abs(cz - pcz) > 40) {
-        conn.send({ t: 'gen', k: chunkKey(cx, cz) });
+      const key = chunkKey(cx, cz);
+      // Changed chunks are always served (the browser cannot make them itself).
+      if (!this.changedChunks.has(key)) {
+        conn.send({ t: 'gen', k: key });
         continue;
       }
-      this.sendChunk(conn, cx, cz).catch((e) => console.error('[chunk] send failed:', e.message));
+      if (Math.abs(cx - pcx) > 64 || Math.abs(cz - pcz) > 64) continue; // far away: the browser asks again later
+      if (conn.chunkReqs.has(key)) continue; // already on its way
+      conn.chunkReqs.add(key);
+      this.sendChunk(conn, cx, cz)
+        .catch((e) => console.error('[chunk] send failed:', e.message))
+        .finally(() => conn.chunkReqs.delete(key));
     }
   }
 
@@ -657,6 +775,11 @@ export class ServerGame extends GameCore {
       }
       this.world.addChunk(c);
       this.populate(c, a.data);
+      const edits = this.pendingEdits.get(chunkKey(a.cx, a.cz));
+      if (edits) {
+        this.pendingEdits.delete(chunkKey(a.cx, a.cz));
+        for (const [conn, m] of edits) if (conn.player && this.clients.has(conn)) this.onSet(conn, conn.player, m);
+      }
     }
   }
 
@@ -814,7 +937,13 @@ export class ServerGame extends GameCore {
     if (n % 20 === 0) this.broadcast(this.timeMessage());
     if (n % 100 === 0) this.sendPlayerList();
     this.flushEffects();
-    for (const c of this.clients) c.flush();
+    for (const c of this.clients) {
+      try {
+        c.flush();
+      } catch (e) {
+        console.error('[net] could not send to a player:', e.message);
+      }
+    }
     if (n % this.cfg.autosaveTicks === 0) this.save();
   }
 
@@ -889,7 +1018,7 @@ export class ServerGame extends GameCore {
     for (const conn of this.clients) {
       const p = conn.player;
       if (!p) continue;
-      const r = (conn.vd + 3) * 16;
+      const r = (Math.min(conn.loadVd || conn.vd, 32) + 4) * 16;
       let out = null;
       for (let i = 0; i < list.length; i += 5) {
         if (Math.abs(list[i] - p.x) > r || Math.abs(list[i + 2] - p.z) > r) continue;
@@ -993,7 +1122,7 @@ export class ServerGame extends GameCore {
       this.saveChunkEntities(c, this.entitiesIn(c));
     }
     this.storage.saveLevel(this.levelRecord());
-    for (const p of this.online.values()) this.savePlayer(p);
+    for (const p of this.online.values()) this.trySavePlayer(p);
     const ms = performance.now() - t0;
     if (this.cfg.verbose || ms > 100) console.log(`[save] saved ${chunks} chunks in ${ms.toFixed(0)} ms`);
     return this.storage.flush();
@@ -1003,17 +1132,20 @@ export class ServerGame extends GameCore {
     if (this.stopped) return;
     this.stopped = true;
     for (const c of [...this.clients]) c.kick(reason);
-    for (const c of this.world.chunks.values()) {
-      if (c.modified) {
-        this.storage.saveChunk(c, this.tilesOf(c));
-        c.modified = false;
+    try {
+      for (const c of this.world.chunks.values()) {
+        if (c.modified) {
+          this.storage.saveChunk(c, this.tilesOf(c));
+          c.modified = false;
+        }
+        this.saveChunkEntities(c, this.entitiesIn(c));
       }
-      this.saveChunkEntities(c, this.entitiesIn(c));
+      this.storage.saveLevel(this.levelRecord());
+      for (const p of this.online.values()) this.trySavePlayer(p);
+    } finally {
+      await this.storage.flush();
+      this.gen.close();
     }
-    this.storage.saveLevel(this.levelRecord());
-    for (const p of this.online.values()) this.savePlayer(p);
-    await this.storage.flush();
-    this.gen.close();
   }
 }
 

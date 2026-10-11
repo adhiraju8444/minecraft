@@ -15,6 +15,12 @@ const PORT = 8800 + Math.floor(Math.random() * 600);
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'blockforge-srv-'));
 const URL = `ws://localhost:${PORT}/ws`;
 const server = spawn(process.execPath, ['server/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA }, stdio: ['ignore', 'pipe', 'inherit'] });
+// Never leave a server running, even if a check throws.
+process.on('exit', () => server.kill('SIGKILL'));
+process.on('uncaughtException', (e) => {
+  console.error(e);
+  process.exit(1);
+});
 await new Promise((resolve, reject) => {
   let out = '';
   server.stdout.on('data', (d) => {
@@ -148,6 +154,82 @@ const c = new Bot('Alice');
 c.key = 'someone-else-key-0123456789';
 await c.connect();
 check(!!c.kicked, `a different key cannot take an online name (${c.kicked})`);
+
+// ---------------------------------------------------------------- abuse checks
+// Every other spelling of an admin command still needs operator rights.
+for (const c of ['/gm creative', '/teleport Alice 0 500 0', '/experience 10L', '/unban someone', '/save-all', '/op Bob']) {
+  b.msgs.length = 0;
+  b.send({ t: 'chat', m: c });
+  const reply = await b.waitFor((m) => m.t === 'chat' && m.c === '#ff6b6b');
+  check(!!reply && !b.msgs.some((m) => ['mode', 'tp', 'xpl'].includes(m.t)), `non-operator is refused: ${c}`);
+}
+
+// A huge head-turn value is cleaned up before others see it.
+b.send({ t: 'st', s: [sp.x + 2, sp.y + 1, sp.z, 1e17, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0] });
+b.send({ t: 'st', s: [sp.x + 2.1, sp.y + 1, sp.z, 9000, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0] });
+await sleep(400);
+const yaws = a.msgs.filter((m) => m.t === 'e').flatMap((m) => [...m.u.filter((u) => u[0] === wb.id).map((u) => u[4]), ...m.s.filter((x) => x.i === wb.id).map((x) => x.st[3])]);
+check(yaws.length > 0 && yaws.every((y) => Math.abs(y) <= Math.PI + 0.01), 'yaw sent to other players stays within -pi..pi', JSON.stringify(yaws.slice(-3)));
+
+// A death message must name its sender. (Wait for the chat rate limit to refill first.)
+await sleep(2500);
+b.send({ t: 'death', m: '<Alice> I am giving op to everyone' });
+const dm = await a.waitFor((m) => m.t === 'chat' && /Bob died|giving op/.test(m.m));
+check(!!dm && dm.m === 'Bob died', 'a fake death message is replaced', dm && dm.m);
+
+// Deeply nested player data cannot break saving.
+const deep = '['.repeat(20000) + ']'.repeat(20000);
+b.ws.send(`{"t":"pd","d":{"x":1,"deep":${deep},"inventory":{"slots":[["dirt",5,0]]}}}`);
+await sleep(300);
+a.send({ t: 'chat', m: '/save' });
+check(!!(await a.waitFor((m) => m.t === 'chat' && m.m === 'Saved the world')), 'the world still saves after junk player data');
+
+// Prototype names are not creature types.
+a.send({ t: 'chat', m: '/gamemode creative' });
+await a.waitFor((m) => m.t === 'mode' && m.m === 'creative');
+const before = b.msgs.length;
+for (const ty of ['__proto__', 'constructor', 'toString']) a.send({ t: 'spawn', e: { k: 'm', p: [sp.x + 1, sp.y + 1, sp.z + 1], ty } });
+await sleep(500);
+check(!b.msgs.slice(before).some((m) => m.t === 'e' && m.s.some((x) => x.k === 'm' && ['__proto__', 'constructor', 'toString'].includes(x.ty))), 'prototype names cannot spawn broken creatures');
+
+// Changed chunks are always served, however far away the request is.
+const far = [cx + 70, cz];
+a.send({ t: 'chat', m: '/gamemode survival' });
+await sleep(300);
+b.send({ t: 'req', l: [bx >> 4, bz >> 4] });
+const servedBefore = b.chunks.length;
+b.state(sp.x + 5000, sp.y + 1, sp.z);
+await sleep(200);
+b.send({ t: 'req', l: [bx >> 4, bz >> 4] });
+await sleep(800);
+check(!b.msgs.some((m) => m.t === 'gen' && m.k === chunkKey(bx >> 4, bz >> 4)), 'a changed chunk is never answered with "generate it yourself"');
+void far;
+void servedBefore;
+b.state(sp.x + 2, sp.y + 1, sp.z);
+await sleep(300);
+
+// Two players take the same stack from one chest: only one gets it.
+const chx = Math.floor(sp.x) - 1, chy = Math.floor(sp.y) + 3, chz = Math.floor(sp.z) + 1;
+const { B: BL } = await import('../js/data/blocks.js');
+const { I: IT } = await import('../js/data/items.js');
+a.send({ t: 'set', x: chx, y: chy, z: chz, b: BL.chest, m: 0 });
+await sleep(300);
+a.send({ t: 'open', x: chx, y: chy, z: chz });
+b.send({ t: 'open', x: chx, y: chy, z: chz });
+await sleep(300);
+const empty = Array(27).fill(null);
+const put = empty.slice();
+put[0] = [IT.diamond, 5, 0];
+a.send({ t: 'tile', x: chx, y: chy, z: chz, ch: [[0, null, [IT.diamond, 5, 0]]], it: put });
+await b.waitFor((m) => m.t === 'tile' && m.it && m.it[0] && m.it[0][1] === 5);
+a.msgs.length = 0;
+b.msgs.length = 0;
+// Both now take the 5 diamonds at the same moment.
+a.send({ t: 'tile', x: chx, y: chy, z: chz, ch: [[0, [IT.diamond, 5, 0], null]], it: empty });
+b.send({ t: 'tile', x: chx, y: chy, z: chz, ch: [[0, [IT.diamond, 5, 0], null]], it: empty });
+await sleep(600);
+const untakes = [...a.msgs, ...b.msgs].filter((m) => m.t === 'untake');
+check(untakes.length === 1 && untakes[0].s[1] === 5, 'taking the same stack twice gives it to only one player', JSON.stringify(untakes));
 
 a.ws.close();
 b.ws.close();

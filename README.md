@@ -15,6 +15,8 @@ npm start            # game + multiplayer server on http://localhost:8080
 
 Open <http://localhost:8080>. **Singleplayer** worlds are saved in your browser; **Multiplayer** joins the shared world on the server the page came from. A browser with WebGL 2 is required (current Chrome, Edge, Firefox or Safari).
 
+**To play with friends over the internet for free**, run `npm run online` instead (or double-click `start-windows.bat` / `start-mac.command`): it prints a public link to share. See [Put it online for free](#put-it-online-for-free).
+
 For single-player only, the game is also a plain static site with no build step: serve the folder with any web server (`npm run static`, `python3 -m http.server 8080`, GitHub Pages, Netlify, Vercel...). ES modules and web workers do not load from `file://`.
 
 ## Controls
@@ -70,18 +72,42 @@ Other dimensions, redstone, enchanting, brewing, villages and other structures, 
 2. Everyone opens the server's address in a browser, clicks **Multiplayer**, types a name and clicks **Join Server**. When the page came from the server itself, the address box can stay empty.
 3. Chat with **T**, hold **Tab** to see who is online, and type `/help` for commands.
 
-The first time a name joins, the browser stores a secret key for it, so nobody else can play as that name on the server later. Playing from another browser or device means picking a different name (or copying the `blockforge.playerKey` value from the old browser's local storage).
+The first time a name joins a server, the browser stores a secret key for that server, so nobody else can play as that name there later (each server gets its own key, so one server can never pass your key to another). Names ignore capitals, spaces and underscores: "Bob Smith" and "bob_smith" are the same player. Playing from another browser or device means picking a different name.
 
-### Who can join
+### Put it online for free
 
-- **Same Wi-Fi / LAN**: the server prints addresses such as `http://192.168.1.20:8080` when it starts. Friends on the same network open that.
-- **Over the internet, from your own computer**: either forward port 8080 on your router to the computer, or run a tunnel such as [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared tunnel --url http://localhost:8080`) or ngrok, and share the https address it gives you. The world lives on your computer and is online while the server runs.
-- **On a hosting service, online all the time**: deploy it as a Node.js web service that supports WebSockets and has a **persistent disk** (the world is saved to files). Point `DATA_DIR` at the disk.
-  - **Railway / Fly.io / any Docker host**: use the included `Dockerfile` and mount a volume at `/data`.
-  - **Render**: the included `render.yaml` sets up a web service with a disk (disks need a paid instance; without one the world is wiped on every restart or deploy).
-  - **A small VPS**: `npm install && npm start`, ideally behind a reverse proxy (Caddy or nginx) for https, and kept running with systemd or pm2.
+Free hosting changes often; this was checked against the providers' own documentation in October 2026.
 
-**Vercel, Netlify and GitHub Pages cannot run the multiplayer server**: they only serve web pages and short-lived functions, not a long-running program with a WebSocket connection and a saved world. You can still put the game page there and run the server somewhere else — players then type the server's address in the Multiplayer screen (use an https/wss server address, because browsers block insecure connections from https pages).
+**1. From your own computer — free, no sign-up, the world stays on your computer (recommended)**
+
+1. Install [Node.js](https://nodejs.org) (the LTS version).
+2. Download this project (on GitHub: **Code → Download ZIP**) and unzip it.
+3. Start it:
+   - **Windows**: double-click `start-windows.bat`
+   - **Mac**: right-click `start-mac.command` → **Open** (the first time; double-click after that)
+   - **Linux** or a terminal: `npm install`, then `npm run online`
+4. After a moment a box appears: **"Your game is online! Send this link to your friends"** with an address like `https://some-random-words.trycloudflare.com`. Friends open it, click **Multiplayer**, type a name and join.
+5. Press **Ctrl+C** in that window to save and stop. The world is in the `data` folder — copy it now and then as a backup.
+
+How it works: the program starts the server and opens a free [Cloudflare Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) (Cloudflare's official `cloudflared` program is downloaded once into `.tools/`). No Cloudflare account is needed and WebSockets work through it. Catches: the game is online only while your computer is on and the window is open (turn off sleep while hosting); the link changes every time you start it; Cloudflare offers quick tunnels without an uptime guarantee; ~70 KB/s of upload is needed for 10 players. Friends on the same Wi-Fi can also use the local address the server prints (e.g. `http://192.168.1.20:8080`).
+
+**2. Online without your computer — free plans with their limits**
+
+- **Railway free plan** (no card; the world is kept on a small disk, but the server sleeps when nobody plays):
+  1. Sign in at [railway.com](https://railway.com) with GitHub, then **New Project → Deploy from GitHub repo** and pick this repository (it builds the included `Dockerfile`).
+  2. In the service's **Variables**, add `DATA_DIR=/data`, `TRUST_PROXY=true` and `RAILWAY_RUN_UID=0` (needed so the server can write to the disk).
+  3. Add a **Volume** mounted at `/data`.
+  4. **Settings → Networking → Generate Domain** (port 8080), and turn on **Serverless** under Settings → Deploy. Share the `….up.railway.app` address.
+
+  Catches: after the 30-day trial the free plan gives $1 of usage a month — roughly 150 hours of play for 3–4 friends — and the server stops when it runs out; the first visit after it slept may need a page reload; Railway staff say free-plan deploys only run outside 08:00–20:00 local time.
+- **Oracle Cloud Always Free** (runs 24/7 and keeps the world, but needs a credit card for sign-up and some Linux skills): create an Ubuntu VM, open ports 80/443, install Node.js, run `npm ci --omit=dev` and the server as a systemd service with `DATA_DIR` and `TRUST_PROXY=true`, and put [Caddy](https://caddyserver.com) in front for https. Oracle may reclaim free VMs that stay mostly idle for a week.
+- **Not suitable for the multiplayer server**: Render's free plan wipes files whenever it sleeps (the world would reset), Fly.io and Koyeb no longer have free plans for new users, Heroku has no free plan, Glitch stopped hosting, Hugging Face Docker Spaces need a paid plan, and **Vercel, Netlify and GitHub Pages only host web pages** — they cannot run a long-running server with WebSockets and a saved world.
+
+**3. The game page only (single-player) — free**
+
+Any static host works. With **GitHub Pages**: on the repository, **Settings → Pages → Deploy from a branch**, pick the branch and `/ (root)`, and save; the game appears at `https://<user>.github.io/<repo>/`. From such a page, players can still join a multiplayer server by typing its https address in the Multiplayer screen.
+
+**Paid but simple** (a few dollars a month, always on, world kept): Render with the included `render.yaml` (adds a disk), Railway's paid plan, Fly.io with a volume, or any VPS with the `Dockerfile` (`docker run -p 8080:8080 -v blockforge-world:/data blockforge`).
 
 ### Settings
 
@@ -101,11 +127,12 @@ The server is configured with environment variables:
 | `PASSWORD` | none | If set, players must enter it to join |
 | `PVP` | `true` | Whether players can hurt each other |
 | `OPS` | none | Comma-separated names that are operators (admins) |
-| `AUTO_OP` | `true` | With no operators yet, the first player to join becomes one |
+| `AUTO_OP` | `true` | The very first player to join a new world becomes an operator (only once per world) |
 | `VIEW_DISTANCE` | `10` | Largest view distance (in chunks) the server supports |
 | `SIM_DISTANCE` | `5` | Chunks around each player where the world is alive (mobs, crops, water) |
 | `AUTOSAVE_SECONDS` | `60` | How often the world is saved |
 | `MAX_CONNECTIONS_PER_IP` | `4` | Connections allowed from one address |
+| `TRUST_PROXY` | `false` | Set to `true` only behind a reverse proxy or tunnel, so player addresses (for bans and limits) come from its `X-Forwarded-For` header. `npm run online` and `render.yaml` turn it on |
 | `TICK_WHEN_EMPTY` | `false` | Keep the world running (time, furnaces, crops) when nobody is online |
 
 ### Admin commands
@@ -116,7 +143,7 @@ Operators can use `/gamemode`, `/time`, `/weather`, `/give`, `/tp`, `/summon`, `
 
 - The server runs the world at 20 ticks per second: block updates, water and lava, crops, furnaces and chests, mobs and their AI, dropped items, arrows, TNT, time and weather. Each browser still moves its own player and generates untouched terrain from the world seed itself, so only chunks that players have changed are downloaded.
 - Only changed chunks are saved (a few KB each, compressed), so a world that friends build in for months usually takes tens of megabytes. Back it up by copying `DATA_DIR` while the server is stopped.
-- A player uses only a few KB/s of bandwidth (about 1–2 KB/s for movement, mobs and chat in testing), plus a short burst when loading areas that others have built in (about 2 KB per changed chunk). Server work is light — around 1 ms of each 50 ms tick with two players exploring — so one small server comfortably handles a group of friends; the default limit is 10 players. Type `status` in the server console to see load, ping and bandwidth.
+- A player uses only a few KB/s of bandwidth (about 1–2 KB/s with two players; about 7 KB/s each with ten players standing together), plus a short burst when loading areas that others have built in (about 2 KB per changed chunk). Server work is light — around 1 ms of each 50 ms tick with two players exploring — so one small server comfortably handles a group of friends; the default limit is 10 players. Type `status` in the server console to see load, ping and bandwidth.
 - Players' browsers are trusted with their own movement, health and inventory, which keeps the game smooth but means a determined player could cheat by editing the game in their browser. The server checks reach, rates and item data, and operators can kick and ban — fine for friends, not for strangers. Set `PASSWORD` if the server is public.
 
 ## Project layout
@@ -134,6 +161,8 @@ js/audio/                   synthesised sound effects and generative music
 js/storage/                 IndexedDB saves
 js/net/                     multiplayer: wire protocol, connection, other players and mobs
 server/                     multiplayer server: web server, WebSocket, world simulation, saving, commands
+server/online.js            npm run online: the server plus a free public link (Cloudflare quick tunnel)
+start-windows.bat, start-mac.command   double-click launchers for npm run online
 tools/                      dev scripts: art and map previews, browser tests
 vendor/three.module.min.js  Three.js r160 (MIT)
 ```

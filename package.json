@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node server/server.js",
+    "online": "node server/online.js",
     "static": "npx --yes http-server -c-1 -p 8080 .",
     "test": "node tools/test-browser.mjs",
     "test:server": "node tools/test-server.mjs",

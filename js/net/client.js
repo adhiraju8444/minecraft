@@ -13,22 +13,40 @@ import { ITEMS, I } from '../data/items.js';
 import { chunkKey } from '../world/constants.js';
 import { deserializeStack } from '../game/inventory.js';
 
-const KEY_STORE = 'blockforge.playerKey';
+const KEY_STORE = 'blockforge.playerKeys'; // { "host:port": key }
+const OLD_KEY_STORE = 'blockforge.playerKey'; // single key used by the first version
 
-// A random secret that proves this browser owns its player name on a server.
-export function playerKey() {
+function randomKey() {
+  const a = new Uint8Array(24);
+  crypto.getRandomValues(a);
+  return [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// A random secret that proves this browser owns its player name on one
+// server. Every server gets its own key, so no server can learn the key
+// this browser uses somewhere else.
+export function playerKey(host) {
+  const h = String(host || location.host).toLowerCase();
   try {
-    let k = localStorage.getItem(KEY_STORE);
-    if (k && /^[A-Za-z0-9_-]{16,128}$/.test(k)) return k;
-    const a = new Uint8Array(24);
-    crypto.getRandomValues(a);
-    k = [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
-    localStorage.setItem(KEY_STORE, k);
+    let keys = {};
+    try {
+      keys = JSON.parse(localStorage.getItem(KEY_STORE) || '{}') || {};
+    } catch {
+      keys = {};
+    }
+    let k = keys[h];
+    if (!(k && /^[A-Za-z0-9_-]{16,128}$/.test(k))) {
+      // The first version kept one key for the page's own server: keep using it there.
+      const old = localStorage.getItem(OLD_KEY_STORE);
+      k = old && h === location.host.toLowerCase() && /^[A-Za-z0-9_-]{16,128}$/.test(old) ? old : randomKey();
+      keys[h] = k;
+      localStorage.setItem(KEY_STORE, JSON.stringify(keys));
+    }
     return k;
   } catch {
-    // Storage blocked: a key for this visit only.
-    if (!playerKey.temp) playerKey.temp = Array.from({ length: 48 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
-    return playerKey.temp;
+    // Storage blocked: keys for this visit only.
+    playerKey.temp = playerKey.temp || {};
+    return (playerKey.temp[h] = playerKey.temp[h] || randomKey());
   }
 }
 
@@ -243,9 +261,18 @@ export class NetClient {
   }
 
   // Container contents the local player edited.
+  // Container edits go to the server as per-slot changes from the last
+  // contents it confirmed: [slot, before, after].
   sendTile(te) {
     if (!te) return;
-    this.send({ t: 'tile', x: te.x, y: te.y, z: te.z, it: te.items.map(packStack) });
+    const now = te.items.map(packStack);
+    const before = te.netItems || now.map(() => null);
+    const ch = [];
+    for (let i = 0; i < now.length; i++) {
+      if (JSON.stringify(now[i]) !== JSON.stringify(before[i] ?? null)) ch.push([i, before[i] ?? null, now[i]]);
+    }
+    te.netItems = now;
+    if (ch.length) this.send({ t: 'tile', x: te.x, y: te.y, z: te.z, ch, it: now });
   }
 
   openTile(te) {
@@ -278,9 +305,18 @@ export class NetClient {
     }
   }
 
+  // Returns whether the hit counts (for tool wear and effects), guessing the
+  // target's invulnerability time the way the server will see it.
   attack(e, player, dmg, crit) {
-    if (e.remote && this.welcome && this.welcome.server && this.welcome.server.pvp === false) return false;
+    if (e.remote) {
+      if (this.welcome && this.welcome.server && this.welcome.server.pvp === false) return false;
+      const info = this.players.find((q) => q[0] === e.netId);
+      if (info && info[2] !== 'survival') return false;
+    }
     this.send({ t: 'atk', i: e.netId, d: dmg, c: crit ? 1 : 0, kb: 0.4 + (player.sprinting ? 0.5 : 0) });
+    if (e.localInvuln > 10 && dmg <= (e.localLastDmg || 0)) return false;
+    if (!(e.localInvuln > 10)) e.localInvuln = 20;
+    e.localLastDmg = dmg;
     return true;
   }
 
@@ -312,7 +348,9 @@ export class NetClient {
     const p = g.player;
     const world = this.world;
     if (!p || !world) return;
-    // Remove proxies that died locally (none should) or were dropped.
+    // Entities made this tick (e.g. drops when dying) must reach the server
+    // before the state that says the player is dead.
+    if (this.spawnQueue.length) this.flushSpawns();
     this.sendState();
     // Full player record: on inventory change (quickly) and every few seconds.
     this.dataTimer++;
@@ -372,7 +410,12 @@ export class NetClient {
       case 'b': {
         if (!world) return;
         const l = m.l;
-        for (let i = 0; i + 4 < l.length; i += 5) world.applyRemote(l[i], l[i + 1], l[i + 2], l[i + 3], l[i + 4]);
+        for (let i = 0; i + 4 < l.length; i += 5) {
+          if (!world.applyRemote(l[i], l[i + 1], l[i + 2], l[i + 3], l[i + 4]) && this.loader) {
+            // Not in the world yet: it may be waiting to be added; update that copy.
+            this.loader.patchArrived(l[i], l[i + 1], l[i + 2], l[i + 3], l[i + 4]);
+          }
+        }
         return;
       }
       case 'chg':
@@ -417,6 +460,7 @@ export class NetClient {
         const te = world && world.getTileEntity(m.x, m.y, m.z);
         if (!te || !Array.isArray(m.it)) return;
         for (let i = 0; i < te.items.length; i++) te.items[i] = unpackStack(m.it[i]);
+        te.netItems = te.items.map(packStack);
         if (te.type === 'furnace') {
           te.burn = m.b | 0;
           te.burnMax = m.bm | 0;
@@ -463,11 +507,51 @@ export class NetClient {
       case 'clear':
         p.inventory.clear();
         return;
-      case 'held':
-        if (m.op === 'consume') p.consumeSelected(m.n | 0);
-        else if (m.op === 'damage') p.damageHeld(m.n | 0);
-        else if (m.op === 'exchange' && I[m.item] !== undefined) p.exchangeHeld(m.item);
+      case 'held': {
+        // Apply to the item that was used, even if the hotbar has moved since.
+        const inv = p.inventory;
+        const sel = inv.selected;
+        const slot = m.id === undefined || (inv.slots[sel] && inv.slots[sel].id === m.id) ? sel : inv.slots.findIndex((s, i) => i < 9 && s && s.id === m.id);
+        if (slot < 0 || !inv.slots[slot]) {
+          if (m.op === 'exchange' && I[m.item] !== undefined && p.mode !== 'creative') {
+            const left = inv.add({ id: I[m.item], count: 1, dmg: 0 });
+            if (left) g.dropItem(p.x, p.y + 0.5, p.z, { id: I[m.item], count: 1, dmg: 0 }, null, true);
+          }
+          return;
+        }
+        inv.selected = slot;
+        try {
+          if (m.op === 'consume') p.consumeSelected(m.n | 0);
+          else if (m.op === 'damage') p.damageHeld(m.n | 0);
+          else if (m.op === 'exchange' && I[m.item] !== undefined) p.exchangeHeld(m.item);
+        } finally {
+          inv.selected = sel;
+        }
         return;
+      }
+      case 'untake': {
+        // The container had less than we took (someone else got there first): hand the rest back.
+        const s = deserializeStack(m.s);
+        if (!s) return;
+        let n = s.count;
+        const cur = g.ui.containers.cursor;
+        if (cur && cur.id === s.id && (cur.dmg || 0) === (s.dmg || 0)) {
+          const k = Math.min(cur.count, n);
+          cur.count -= k;
+          n -= k;
+          if (cur.count <= 0) g.ui.containers.cursor = null;
+        }
+        for (let i = 0; i < p.inventory.slots.length && n > 0; i++) {
+          const st = p.inventory.slots[i];
+          if (!st || st.id !== s.id || (st.dmg || 0) !== (s.dmg || 0)) continue;
+          const k = Math.min(st.count, n);
+          st.count -= k;
+          n -= k;
+          if (st.count <= 0) p.inventory.slots[i] = null;
+        }
+        p.inventory.changed();
+        return;
+      }
       case 'mode':
         p.setMode(m.m);
         if (g.meta) g.meta.mode = m.m;
@@ -476,6 +560,7 @@ export class NetClient {
       case 'tp':
         if (p.sleeping) p.wakeUp(false);
         p.teleport(m.p[0], m.p[1], m.p[2]);
+        this.sendState(true);
         return;
       case 'kill':
         p.health = Math.min(p.health, 1);

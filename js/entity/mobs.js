@@ -593,6 +593,6 @@ export class Mob extends Living {
 }
 
 export function createMob(world, type, x, y, z, opts) {
-  if (!MOB_TYPES[type]) return null;
+  if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(MOB_TYPES, type)) return null;
   return new Mob(world, type, x, y, z, opts);
 }

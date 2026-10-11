@@ -5,7 +5,7 @@ import { ITEMS, maxStack } from '../js/data/items.js';
 import { B } from '../js/data/blocks.js';
 import { MOB_TYPES } from '../js/entity/mobs.js';
 import { DIFFICULTY } from '../js/world/constants.js';
-import { MODES } from '../js/net/protocol.js';
+import { MODES, nameKey } from '../js/net/protocol.js';
 
 const PUBLIC = {
   help: ['/help', 'List commands'],
@@ -42,6 +42,10 @@ const ADMIN = {
   save: ['/save', 'Save the world now'],
   status: ['/status', 'Server load, players, ping and bandwidth'],
 };
+
+// Other spellings of commands; permissions follow the main name.
+const ALIASES = { '?': 'help', tell: 'msg', w: 'msg', gm: 'gamemode', teleport: 'tp', experience: 'xp', unban: 'pardon', 'save-all': 'save' };
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 const BIOMES = ['ocean', 'deep ocean', 'beach', 'plains', 'forest', 'birch forest', 'taiga', 'snowy plains', 'desert', 'mountains', 'swamp', 'river', 'frozen ocean', 'snowy taiga', 'snowy beach', 'frozen river'];
 
@@ -89,7 +93,8 @@ export class ServerCommands {
     const g = this.game;
     const w = g.world;
     const [cmd, ...args] = text.slice(1).trim().split(/\s+/);
-    const name = (cmd || '').toLowerCase();
+    const raw = (cmd || '').toLowerCase();
+    const name = has(ALIASES, raw) ? ALIASES[raw] : raw;
     const ok = (m) => sender.chat(m, '#cfcfcf');
     const err = (m) => sender.chat(m, '#ff6b6b');
     const self = sender.isConsole ? null : sender;
@@ -104,14 +109,24 @@ export class ServerCommands {
       return self;
     };
 
-    if (!PUBLIC[name] && ADMIN[name] && !sender.op) {
-      err('You need to be an operator to use that command. The server owner can type "op <name>" in the server console.');
+    // Everything that is not a public command needs operator rights.
+    if (!has(PUBLIC, name) && !sender.op) {
+      if (has(ADMIN, name) || name === 'stop') err('You need to be an operator to use that command. The server owner can type "op <name>" in the server console.');
+      else err('Unknown command. Type /help for a list.');
       return;
     }
+    // A player named by the words in args[from...]: tries the longest run of
+    // words first so names with spaces work. Returns [player, wordsUsed].
+    const playerArg = (from = 0) => {
+      for (let k = args.length - from; k >= 1; k--) {
+        const p = g.findPlayer(args.slice(from, from + k).join(' '));
+        if (p) return [p, k];
+      }
+      return [null, 0];
+    };
 
     switch (name) {
-      case 'help':
-      case '?': {
+      case 'help': {
         const list = { ...PUBLIC, ...(sender.op ? ADMIN : {}) };
         for (const [usage, desc] of Object.values(list)) ok(`${usage} — ${desc}`);
         return;
@@ -121,11 +136,9 @@ export class ServerCommands {
         ok(`${names.length} of ${g.cfg.maxPlayers} players online: ${names.join(', ') || 'nobody'}`);
         return;
       }
-      case 'msg':
-      case 'tell':
-      case 'w': {
-        const to = g.findPlayer(args[0]);
-        const msg = args.slice(1).join(' ');
+      case 'msg': {
+        const [to, used] = playerArg(0);
+        const msg = args.slice(used).join(' ');
         if (!to || !msg) return err(PUBLIC.msg[0]);
         to.chat(`${sender.name} whispers to you: ${msg}`, '#bdbdbd');
         sender.chat(`You whisper to ${to.name}: ${msg}`, '#bdbdbd');
@@ -145,8 +158,7 @@ export class ServerCommands {
         p.send({ t: 'kill' });
         return;
       }
-      case 'gamemode':
-      case 'gm': {
+      case 'gamemode': {
         const map = { survival: 'survival', s: 'survival', 0: 'survival', creative: 'creative', c: 'creative', 1: 'creative', spectator: 'spectator', sp: 'spectator', 3: 'spectator' };
         const m = map[(args[0] || '').toLowerCase()];
         if (!m || !MODES.includes(m)) return err(ADMIN.gamemode[0]);
@@ -211,8 +223,7 @@ export class ServerCommands {
         ok(`Gave ${count} [${ITEMS[id].display}] to ${p.name}`);
         return;
       }
-      case 'tp':
-      case 'teleport': {
+      case 'tp': {
         // /tp <player> | /tp <player> <target> | /tp <x y z> | /tp <player> <x y z>
         let who = self, dest = null;
         const nums = (a) => a.length === 3 && a.every((v) => /^~?-?\d*\.?\d*$/.test(v));
@@ -249,7 +260,7 @@ export class ServerCommands {
       }
       case 'summon': {
         const t = (args[0] || '').toLowerCase();
-        if (!MOB_TYPES[t] && t !== 'tnt') return err(`Unknown creature. Try: ${Object.keys(MOB_TYPES).join(', ')}, tnt`);
+        if (!has(MOB_TYPES, t) && t !== 'tnt') return err(`Unknown creature. Try: ${Object.keys(MOB_TYPES).join(', ')}, tnt`);
         const base = self || { x: g.level.spawn.x, y: g.level.spawn.y, z: g.level.spawn.z, yaw: 0 };
         const x = args[1] ? this.coord(args[1], base.x) : base.x - Math.sin(base.yaw) * 2;
         const y = args[2] ? this.coord(args[2], base.y) : base.y;
@@ -275,8 +286,7 @@ export class ServerCommands {
         ok(`Healed ${p.name}`);
         return;
       }
-      case 'xp':
-      case 'experience': {
+      case 'xp': {
         const a = args[0] || '';
         const levels = /l$/i.test(a);
         const n = parseInt(a, 10);
@@ -354,13 +364,16 @@ export class ServerCommands {
         return;
       }
       case 'ban': {
-        const n = (args[0] || '').toLowerCase();
-        if (!n) return err(ADMIN.ban[0]);
-        g.bans.add(n);
+        // An online player (names with spaces work), or an exact offline name
+        // (write spaces as _ , e.g. "ban Bob_Smith griefing").
+        if (!args[0]) return err(ADMIN.ban[0]);
+        const [p, used] = playerArg(0);
+        const banned = p ? p.name : args[0];
+        if (p && p === self) return err('You cannot ban yourself');
+        g.bans.add(nameKey(banned));
         g.storage.saveList('banned-players', [...g.bans]);
-        const p = g.findPlayer(n);
-        if (p && p !== self) p.conn.kick(args.slice(1).join(' ') || 'You are banned from this server');
-        ok(`Banned ${args[0]}`);
+        if (p) p.conn.kick(args.slice(used).join(' ') || 'You are banned from this server');
+        ok(`Banned ${banned}`);
         return;
       }
       case 'ban-ip': {
@@ -372,14 +385,15 @@ export class ServerCommands {
         ok(`Banned the address of ${p.name}`);
         return;
       }
-      case 'pardon':
-      case 'unban': {
-        const n = (args[0] || '').toLowerCase();
-        if (!n) return err(ADMIN.pardon[0]);
-        g.bans.delete(n);
-        g.storage.saveList('banned-players', [...g.bans]);
-        if (g.ipBans.delete(args[0])) g.storage.saveList('banned-ips', [...g.ipBans]);
-        ok(`Unbanned ${args[0]}`);
+      case 'pardon': {
+        const whole = args.join(' ');
+        if (!whole) return err(ADMIN.pardon[0]);
+        const wasName = g.bans.delete(nameKey(whole));
+        if (wasName) g.storage.saveList('banned-players', [...g.bans]);
+        const wasIp = g.ipBans.delete(whole);
+        if (wasIp) g.storage.saveList('banned-ips', [...g.ipBans]);
+        if (wasName || wasIp) ok(`Unbanned ${whole}`);
+        else err(`${whole} was not banned`);
         return;
       }
       case 'op':
@@ -406,7 +420,6 @@ export class ServerCommands {
         return;
       }
       case 'save':
-      case 'save-all':
         g.save().then(() => ok('Saved the world'));
         return;
       case 'stop':

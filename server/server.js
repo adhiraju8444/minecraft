@@ -54,20 +54,27 @@ const cfg = {
   autoOp: bool(env.AUTO_OP, true),
   autosaveTicks: int(env.AUTOSAVE_SECONDS, 60, 10, 3600) * 20,
   tickWhenEmpty: bool(env.TICK_WHEN_EMPTY, false),
-  trustProxy: bool(env.TRUST_PROXY, true),
+  // Only behind a reverse proxy / tunnel that sets X-Forwarded-For.
+  trustProxy: bool(env.TRUST_PROXY, false),
   maxPerIp: int(env.MAX_CONNECTIONS_PER_IP, 4, 1, 100),
   verbose: bool(env.VERBOSE, false),
 };
 
 // ------------------------------------------------------------ world
-const storage = new Storage(cfg.dataDir);
-const game = new ServerGame(cfg, storage);
-const info = game.init();
+let storage, game, info;
+try {
+  storage = new Storage(cfg.dataDir);
+  game = new ServerGame(cfg, storage);
+  info = game.init();
+} catch (e) {
+  console.error(`\n[server] ${e.message}\n`);
+  process.exit(1);
+}
 
 // ------------------------------------------------------------ connections
 const RATES = {
-  // [per second, burst]
-  msg: [300, 600],
+  // [per second, burst]; 'msg' is charged for every message in a frame
+  msg: [400, 800],
   set: [40, 120],
   spawn: [40, 200],
   atk: [20, 40],
@@ -95,6 +102,7 @@ class Conn {
     this.bad = 0;
     this.bytesOut = 0; // before WebSocket compression
     this.since = Date.now();
+    this.chunkReqs = new Set(); // chunks being sent right now
   }
 
   allow(kind) {
@@ -128,6 +136,8 @@ class Conn {
 
   sendChunk(cx, cz, payload) {
     if (this.closed || this.ws.readyState !== 1) return;
+    // A connection that is far behind skips chunks; the browser asks again in a few seconds.
+    if (this.ws.bufferedAmount > 4 << 20) return;
     this.flush();
     const frame = chunkFrame(cx, cz, 0, payload);
     this.bytesOut += frame.length;
@@ -136,11 +146,13 @@ class Conn {
 
   kick(reason) {
     if (this.closed) return;
-    this.queue.push({ t: 'kick', reason });
-    this.flush();
     this.closed = true;
     this.reason = reason;
+    const q = this.queue;
+    this.queue = [];
+    q.push({ t: 'kick', reason });
     try {
+      if (this.ws.readyState === 1) this.ws.send(JSON.stringify(q.length === 1 ? q[0] : q));
       this.ws.close(4000, String(reason).slice(0, 100));
     } catch {
       this.ws.terminate();
@@ -210,7 +222,13 @@ function serverInfo() {
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try {
+    url = new URL(req.url, 'http://x');
+  } catch {
+    res.writeHead(400);
+    return res.end();
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' });
     return res.end();
@@ -240,9 +258,21 @@ const wss = new WebSocketServer({
   perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 4, zlibDeflateOptions: { level: 4 } },
 });
 
+// The address a player connects from. Behind a trusted proxy or tunnel, the
+// last X-Forwarded-For entry is the one that proxy added (earlier entries can
+// be faked by the player).
+function clientIp(req) {
+  if (cfg.trustProxy) {
+    const parts = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+    const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+    if (cf) return cf;
+  }
+  return req.socket.remoteAddress || '?';
+}
+
 wss.on('connection', (ws, req) => {
-  const fwd = cfg.trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
-  const ip = fwd || req.socket.remoteAddress || '?';
+  const ip = clientIp(req);
   const n = (perIp.get(ip) || 0) + 1;
   perIp.set(ip, n);
   const conn = new Conn(ws, ip);
@@ -254,7 +284,6 @@ wss.on('connection', (ws, req) => {
   helloTimer.unref();
   ws.on('message', (data, isBinary) => {
     if (conn.closed || isBinary) return;
-    if (!conn.allow('msg')) return conn.kick('You sent too many messages');
     let m;
     try {
       m = JSON.parse(data.toString());
@@ -262,8 +291,9 @@ wss.on('connection', (ws, req) => {
       m = null;
     }
     const list = Array.isArray(m) ? m : [m];
-    if (list.length > 2000) return conn.kick('You sent too many messages');
+    if (list.length > 400) return conn.kick('You sent too many messages');
     for (const msg of list) {
+      if (!conn.allow('msg')) return conn.kick('You sent too many messages');
       if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') {
         if (++conn.bad > 20) return conn.kick('The server could not understand your game');
         continue;
@@ -359,6 +389,11 @@ async function stop(signal) {
     await game.shutdown();
   } catch (e) {
     console.error('[server] error while saving:', e);
+    try {
+      await storage.flush();
+    } catch {
+      /* nothing more we can do */
+    }
   }
   wss.close();
   server.close();

@@ -26,6 +26,7 @@ function startServer() {
     let out = '';
     server.stdout.on('data', (d) => {
       out += d;
+      if (process.env.SERVER_LOG) fs.appendFileSync(process.env.SERVER_LOG, d);
       if (out.includes('Type "help"')) resolve();
     });
     server.stderr.on('data', (d) => process.stderr.write('[server] ' + d));
@@ -39,6 +40,13 @@ function stopServer() {
     server.kill('SIGTERM');
   });
 }
+
+// Never leave a server running, even if a check throws.
+process.on('exit', () => server && server.kill('SIGKILL'));
+process.on('uncaughtException', (e) => {
+  console.error(e);
+  process.exit(1);
+});
 
 await startServer();
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
@@ -208,16 +216,19 @@ await b.evaluate(() => window.blockforge.ui.containers.close());
 // Mobs: summon a pig; both see it; Alice hits it.
 await a.evaluate((s) => window.blockforge.net.send({ t: 'chat', m: `/summon pig ${s.x + 0.5} ${s.y + 1} ${s.z + 3.5}` }), spot);
 check(await until(b, () => window.blockforge.world.entities.some((e) => e.type === 'pig')), 'Bob sees the summoned pig');
-const hp = await a.evaluate(async () => {
+const hp = await a.evaluate(async (s) => {
   const g = window.blockforge;
   await new Promise((r) => setTimeout(r, 500));
-  const pig = g.world.entities.find((e) => e.type === 'pig');
+  // The summoned pig is the one nearest to where it was summoned (wild pigs may live nearby).
+  const pigs = g.world.entities.filter((e) => e.type === 'pig');
+  const d = (e) => Math.hypot(e.x - (s.x + 0.5), e.z - (s.z + 3.5));
+  const pig = pigs.sort((x, y) => d(x) - d(y))[0];
   if (!pig) return null;
   const h0 = pig.health;
   g.player.attack(pig);
   await new Promise((r) => setTimeout(r, 800));
   return [h0, pig.health];
-});
+}, spot);
 check(!!hp && hp[1] < hp[0], 'hitting the pig hurts it on the server', JSON.stringify(hp));
 
 // PvP: Alice hits Bob (both survival).
@@ -262,6 +273,8 @@ if (SHOTS) {
 await b.evaluate(() => window.blockforge.quitToTitle());
 check(await until(a, () => window.blockforge.ui.chatLines.some((l) => l.el.textContent === 'Bob left the game')), 'Alice is told Bob left');
 check(await until(a, () => !window.blockforge.world.entities.some((e) => e.remote && e.name === 'Bob')), "Bob's body disappears");
+const bErrors = b.errors;
+await b.context().close(); // the rest only needs Alice
 
 // ---------------------------------------------------------------- part 2: one player, deeper checks
 const cmd = (c) => a.evaluate((c) => window.blockforge.net.send({ t: 'chat', m: c }), c);
@@ -316,6 +329,22 @@ await a.evaluate(() => {
 });
 check(await until(a, () => window.blockforge.state === 'playing' && window.blockforge.player.health === 20), 'respawn with full health');
 
+// Dying from something the browser works out itself (here: burning) also drops everything.
+await cmd('/give stick 4');
+await until(a, (id) => window.blockforge.player.inventory.count(id) === 4, I.stick);
+await a.evaluate(() => {
+  const p = window.blockforge.player;
+  p.health = 1;
+  p.fireTicks = 40;
+});
+check(await until(a, () => window.blockforge.state === 'dead', null, 15000), 'the player burns to death', await a.evaluate(() => JSON.stringify({ s: window.blockforge.state, h: window.blockforge.player.health, f: window.blockforge.player.fireTicks, m: window.blockforge.player.mode, inv: window.blockforge.player.invuln })));
+check(await until(a, (id) => window.blockforge.world.entities.some((e) => e.stack && e.stack.id === id), I.stick), 'items dropped on a death worked out by the browser reach the world');
+await a.evaluate(() => {
+  window.blockforge.ui.closeScreen();
+  window.blockforge.respawn();
+});
+await until(a, () => window.blockforge.state === 'playing');
+
 // Saving: restart the server; blocks, containers and the player come back.
 await cmd('/give gold_ingot 3');
 await until(a, (id) => window.blockforge.player.inventory.count(id) === 3, I.gold_ingot);
@@ -336,22 +365,24 @@ const after = await a.evaluate(([s, stone, fx, fy, fz, gold]) => {
 }, [spot, B.stone, ...fpos, I.gold_ingot]);
 check(after.platform, 'built blocks survive a restart');
 check(after.furnace, 'the furnace survives a restart');
-check(after.gold === 3, 'the inventory survives a restart', String(after.gold));
+check(after.gold === 3, 'the inventory survives a restart', after.gold === 3 ? '3' : String(after.gold) + ' — ' + JSON.stringify(await a.evaluate(() => ({ state: window.blockforge.state, hp: window.blockforge.player.health, y: window.blockforge.player.y, chat: window.blockforge.ui.chatLines.map((l) => l.el.textContent) }))) + ' — file: ' + fs.readFileSync(path.join(DATA, 'players', 'alice.json'), 'utf8').slice(0, 400));
 check(Math.hypot(after.pos[0] - posBefore[0], after.pos[1] - posBefore[1]) < 1.5, 'the position survives a restart');
 
 // Someone else cannot use a name that is taken.
+const aErrors = a.errors;
+await a.evaluate(() => window.blockforge.quitToTitle());
+await sleep(500);
+await a.context().close(); // free the CPU for the next browser
 const c = await newPage();
 await c.goto(URL, { waitUntil: 'domcontentloaded' });
 await c.waitForFunction(() => window.blockforge && window.blockforge.state === 'title');
-await a.evaluate(() => window.blockforge.quitToTitle());
-await sleep(500);
 await c.evaluate(() => window.blockforge.joinServer({ address: '', name: 'alice' }));
 await c.waitForFunction(() => window.blockforge.ui.screenName === 'neterror', null, { timeout: 30000 });
 const refusal = await c.evaluate(() => document.querySelector('.menu-sub')?.textContent || '');
 check(/belongs to another player/.test(refusal), 'a different browser cannot take a used name', refusal);
 
-for (const [n, p] of [['Alice', a], ['Bob', b]]) {
-  const errs = p.errors.filter((e) => !/favicon|WebGL|GPU stall|Automatic fallback/.test(e));
+for (const [n, errors] of [['Alice', aErrors], ['Bob', bErrors]]) {
+  const errs = errors.filter((e) => !/favicon|WebGL|GPU stall|Automatic fallback/.test(e));
   check(errs.length === 0, `${n}'s page has no errors`, errs.slice(0, 3).join(' | '));
 }
 await browser.close();

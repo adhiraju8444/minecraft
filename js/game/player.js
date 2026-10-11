@@ -305,7 +305,8 @@ export class Player extends Living {
     if (this.mode !== 'survival' && source.type !== 'void') return false;
     if (this.sleeping) this.wakeUp(false);
     const diff = this.game.difficulty;
-    if (source.type === 'mob' || source.type === 'arrow') {
+    // Difficulty scales what monsters do, not what other players do.
+    if ((source.type === 'mob' || source.type === 'arrow') && !(source.entity && source.entity.isPlayer)) {
       if (diff === 0) return false;
       if (diff === 1) amount = Math.min(amount / 2 + 1, amount);
       if (diff === 3) amount *= 1.5;

@@ -83,6 +83,11 @@ class Game extends GameCore {
 
   applySettings() {
     const s = this.settings;
+    // The server sends block changes for as far as this browser loads chunks.
+    if (this.net && this.net.lastVd !== s.renderDist) {
+      this.net.lastVd = s.renderDist;
+      this.net.send({ t: 'vd', vd: s.renderDist });
+    }
     this.audio.setVolumes({ master: s.master / 100, music: s.music / 100, sound: s.sound / 100 });
     this.gfx.setPixelRatio(s.pixelRatio);
     this.ui.applyScale();
@@ -216,7 +221,7 @@ class Game extends GameCore {
     const net = new NetClient(this, addr.ws);
     let welcome;
     try {
-      welcome = await net.connect({ name, key: playerKey(), vd: this.settings.renderDist, pw: password || undefined });
+      welcome = await net.connect({ name, key: playerKey(addr.host), vd: this.settings.renderDist, pw: password || undefined });
     } catch (e) {
       net.close();
       this.ui.showNetError('Could not join the server', e.message, () => this.ui.showMultiplayer());
@@ -241,6 +246,7 @@ class Game extends GameCore {
     this.world = world;
     this.loader = new ChunkLoader(world, null, this.netChunkHooks(), net);
     net.attach(world, this.loader);
+    net.lastVd = this.settings.renderDist;
     // Share the local player's sounds and block-break particles.
     this.audio.tap = (n, o) => net.tapSound(n, o);
     this.gfx.particles.tap = (x, y, z, id, meta) => net.tapBreak(x, y, z, id, meta);
@@ -651,6 +657,8 @@ class Game extends GameCore {
     }
     if (!target) target = this.meta.spawn;
     p.teleport(target.x, target.y + 0.1, target.z);
+    // Tell the server where we are before asking it for chunks around here.
+    if (this.net) this.net.sendState(true);
     this.state = 'playing';
     this.respawnCheck = 40;
     this.resume();

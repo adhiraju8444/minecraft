@@ -349,6 +349,8 @@ export class Projectile extends Entity {
       if (!e || e === this || e.dead || !e.targetable && !e.isPlayer) continue;
       if (e === this.shooter && this.age < 5) continue;
       if (e.isPlayer && e.mode === 'spectator') continue;
+      // A multiplayer server with PvP turned off lets players' shots pass through other players.
+      if (e.isPlayer && e !== this.shooter && this.shooter && this.shooter.isPlayer && this.game.pvp === false) continue;
       if (e.health !== undefined && e.health <= 0) continue;
       const r = rayAABB(this.x, this.y, this.z, dx, dy, dz, e.box.grow(0.3, 0.3, 0.3), maxT);
       if (r && r.t < maxT) {

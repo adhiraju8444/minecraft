@@ -16,21 +16,47 @@ export class GenPool {
     this.seed = seed;
     this.workers = [];
     this.waiting = new Map(); // "cx,cz" -> [resolve...]
+    this.jobs = new Map(); // worker -> Set of "cx,cz" it is working on
     this.rr = 0;
     this.sync = null;
     try {
       for (let i = 0; i < size; i++) {
         const w = new Worker(new URL(import.meta.url), { workerData: { genWorker: true, seed } });
-        w.on('message', (m) => this.done(m));
-        w.on('error', (e) => {
-          console.error('[gen] worker failed, generating on the main thread:', e.message);
-          this.workers = this.workers.filter((x) => x !== w);
+        this.jobs.set(w, new Set());
+        w.on('message', (m) => {
+          this.jobs.get(w)?.delete(m.cx + ',' + m.cz);
+          this.done(m);
         });
+        const lost = (why) => {
+          if (!this.jobs.has(w)) return;
+          const keys = [...this.jobs.get(w)];
+          this.jobs.delete(w);
+          this.workers = this.workers.filter((x) => x !== w);
+          if (!this.closing) console.error(`[gen] a terrain worker stopped (${why}); ${this.workers.length ? 'using the others' : 'generating on the main thread'}`);
+          // Hand its unfinished chunks to another worker (or do them here).
+          for (const k of keys) {
+            const [cx, cz] = k.split(',').map(Number);
+            this.dispatch(cx, cz);
+          }
+        };
+        w.on('error', (e) => lost(e.message));
+        w.on('exit', (code) => lost('exit ' + code));
         w.unref();
         this.workers.push(w);
       }
     } catch (e) {
       console.error('[gen] workers unavailable:', e.message);
+    }
+  }
+
+  dispatch(cx, cz) {
+    if (this.closing) return;
+    if (this.workers.length) {
+      const w = this.workers[this.rr++ % this.workers.length];
+      this.jobs.get(w).add(cx + ',' + cz);
+      w.postMessage({ cx, cz });
+    } else {
+      setImmediate(() => this.done({ cx, cz, ...this.generateSync(cx, cz) }));
     }
   }
 
@@ -50,12 +76,7 @@ export class GenPool {
         return;
       }
       this.waiting.set(key, [resolve]);
-      if (this.workers.length) {
-        this.workers[this.rr++ % this.workers.length].postMessage({ cx, cz });
-      } else {
-        // No workers: generate right away on this thread.
-        setImmediate(() => this.done({ cx, cz, ...this.generateSync(cx, cz) }));
-      }
+      this.dispatch(cx, cz);
     });
   }
 
@@ -65,6 +86,7 @@ export class GenPool {
   }
 
   close() {
+    this.closing = true;
     for (const w of this.workers) w.terminate();
     this.workers = [];
   }

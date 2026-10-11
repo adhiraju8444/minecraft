@@ -379,7 +379,8 @@ export class UI {
     toggle(() => `Show FPS: ${s.showFps ? 'ON' : 'OFF'}`, () => (s.showFps = !s.showFps));
     toggle(() => `Resolution: ${s.pixelRatio > 1 ? 'Sharp (HiDPI)' : 'Fast'}`, () => (s.pixelRatio = s.pixelRatio > 1 ? 1 : 2));
     toggle(() => `Touch Controls: ${s.touch === 'auto' ? 'Auto' : s.touch === 'on' ? 'ON' : 'OFF'}`, () => (s.touch = s.touch === 'auto' ? 'on' : s.touch === 'on' ? 'off' : 'auto'));
-    if (g.world && g.state !== 'title' && !g.meta?.hardcore) {
+    // In multiplayer the server decides the difficulty (/difficulty for operators).
+    if (g.world && g.state !== 'title' && !g.meta?.hardcore && !g.net) {
       toggle(() => `Difficulty: ${DIFFICULTY[g.difficulty]}`, () => {
         g.difficulty = (g.difficulty + 1) % 4;
         if (g.meta) g.meta.difficulty = g.difficulty;
@@ -538,7 +539,8 @@ export class UI {
     };
     this.bindButtons(node, { join, cancel: () => this.showTitle() });
     node.addEventListener('keydown', (e) => {
-      if (e.code === 'Enter') join();
+      // Enter in a text box joins; on a focused button, the button decides.
+      if ((e.code === 'Enter' || e.code === 'NumpadEnter') && e.target.tagName === 'INPUT') join();
     });
     this.setScreen('multiplayer', node);
     if (!name) setTimeout(() => nameIn.focus(), 40);

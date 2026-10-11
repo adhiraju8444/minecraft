@@ -98,6 +98,10 @@ const results = await page.evaluate(async () => {
   g.input.state.attack = false;
   out.mineTicks = t; // stone pickaxe on stone: 0.6s (~12 ticks + delay)
   ticks(30);
+  // Walk over the drop (it bounces off in a random direction).
+  const drop = w.entities.find((e) => e.stack && e.stack.id === B.cobblestone && !e.dead);
+  if (drop) p.teleport(drop.x, drop.y, drop.z);
+  ticks(5);
   out.gotCobble = p.inventory.count(B.cobblestone);
   out.pickDamage = p.inventory.slots[0]?.dmg;
   // ---- explosion
