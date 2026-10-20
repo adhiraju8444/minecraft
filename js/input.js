@@ -51,6 +51,7 @@ export class Input {
     for (const k of Object.keys(this.state)) this.state[k] = false;
     if (this.game.ui) this.game.ui.showPlayerList?.(false);
     this.down.clear();
+    this.debugHeld = false;
   }
 
   requestLock() {
@@ -105,7 +106,7 @@ export class Input {
       }
       return;
     }
-    if (isDown && ['Space', 'F1', 'F2', 'F3', 'F5', 'Tab', 'Slash', 'ArrowUp', 'ArrowDown'].includes(code)) e.preventDefault();
+    if (isDown && ['Space', 'F1', 'F2', 'F3', 'F4', 'F5', 'Tab', 'Slash', 'ArrowUp', 'ArrowDown'].includes(code)) e.preventDefault();
     if (isDown && (e.ctrlKey || e.metaKey) && ['KeyW', 'KeyS', 'KeyD', 'KeyA'].includes(code) && game.state === 'playing') e.preventDefault();
 
     if (code === K.playerList && game.net) {
@@ -115,6 +116,11 @@ export class Input {
     }
     if (!isDown) {
       this.down.delete(code);
+      // The debug key toggles on release, unless it was held for F3+F4.
+      if (code === K.debug && this.debugHeld) {
+        this.debugHeld = false;
+        if (!this.debugCombo && game.state === 'playing') ui.toggleDebug();
+      }
       for (const [a, c] of Object.entries(K)) if (c === code && a in this.state) this.state[a] = false;
       if (code === 'ShiftRight' && K.sneak === 'ShiftLeft') this.state.sneak = false;
       if (code === 'ControlRight' && K.sprint === 'ControlLeft') this.state.sprint = false;
@@ -146,7 +152,13 @@ export class Input {
       e.preventDefault();
       ui.openChat('/');
     } else if (code === K.perspective) game.cyclePerspective();
-    else if (code === K.debug) ui.toggleDebug();
+    else if (code === K.debug) {
+      this.debugHeld = true;
+      this.debugCombo = false;
+    } else if (code === 'F4' && this.debugHeld) {
+      this.debugCombo = true;
+      game.cycleGameMode();
+    }
     else if (code === K.hideHud) ui.toggleHud();
     else if (code === K.screenshot) game.screenshot();
   }

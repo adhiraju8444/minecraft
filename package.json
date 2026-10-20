@@ -10,7 +10,8 @@
     "static": "npx --yes http-server -c-1 -p 8080 .",
     "test": "node tools/test-browser.mjs",
     "test:server": "node tools/test-server.mjs",
-    "test:multiplayer": "node tools/test-multiplayer.mjs"
+    "test:multiplayer": "node tools/test-multiplayer.mjs",
+    "test:touch": "node tools/test-touch.mjs"
   },
   "dependencies": {
     "ws": "^8.22.0"

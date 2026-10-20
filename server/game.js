@@ -134,8 +134,9 @@ export class ServerGame extends GameCore {
     this.ops = new Set(this.storage.loadList('ops').map(nameKey));
     for (const n of cfg.ops) this.ops.add(nameKey(n));
     this.bans = new Set(this.storage.loadList('banned-players').map(nameKey));
-    // The first player becomes an operator only once per world.
-    if (level.autoOpDone === undefined) level.autoOpDone = this.ops.size > 0 || this.storage.hasPlayers();
+    // The first player to join a world with no operators becomes one. That
+    // happens once per world (level.firstOp), so a later deop sticks.
+    delete level.autoOpDone;
     this.ipBans = new Set(this.storage.loadList('banned-ips').map(String));
     this.commands = new ServerCommands(this);
     this.spawner = new Spawner(this);
@@ -213,13 +214,13 @@ export class ServerGame extends GameCore {
     p.keyHash = keyHash;
     p.record = record || { name, keyHash, firstJoined: Date.now() };
     p.mode = record && MODES.includes(record.mode) ? record.mode : this.level.gamemode || 'survival';
-    if (!this.level.autoOpDone) {
-      this.level.autoOpDone = true;
-      if (cfg.autoOp && this.ops.size === 0) {
-        this.setOp(name, true);
-        console.log(`[ops] ${name} is the first player, so they are now an operator (admin). Use "deop ${name}" in this console to undo; nobody else becomes one automatically.`);
-      }
+    let autoOp = false;
+    if (cfg.autoOp && !this.level.firstOp && this.ops.size === 0) {
+      this.level.firstOp = name;
+      this.setOp(name, true);
       this.storage.saveLevel(this.levelRecord());
+      autoOp = true;
+      console.log(`[ops] ${name} is the first player, so they are now an operator (admin). Use "deop ${name}" in this console to undo; nobody else becomes one automatically.`);
     }
     p.op = this.isOp(name);
     const d = record ? sanitizePlayerData(record.data) : null;
@@ -233,7 +234,7 @@ export class ServerGame extends GameCore {
     this.online.set(lower, p);
     const w = this.world;
     conn.send({
-      t: 'welcome', v: PROTOCOL, id: p.id, name, op: p.op, mode: p.mode, data: d,
+      t: 'welcome', v: PROTOCOL, id: p.id, name, op: p.op, autoOp, mode: p.mode, data: d,
       server: { name: cfg.serverName, motd: cfg.motd, pvp: cfg.pvp, maxPlayers: cfg.maxPlayers },
       seed: w.seed, time: w.time, day: w.day, raining: w.weather.raining, strength: w.weather.strength,
       rules: w.rules, difficulty: this.difficulty, spawn: this.level.spawn, vd: conn.vd,

@@ -245,6 +245,8 @@ img, .icon { image-rendering: pixelated; }
 .item .dur { position: absolute; left: calc(var(--gs) * 2); right: calc(var(--gs) * 1); bottom: calc(var(--gs) * 1); height: calc(var(--gs) * 2); background: #000; }
 .item .dur > div { height: 50%; }
 .cursor-item { position: fixed; z-index: 50; pointer-events: none !important; transform: translate(-50%, -50%); }
+/* The held stack and tooltips must never catch the click meant for a slot. */
+#ui .cursor-item *, #ui .tooltip * { pointer-events: none !important; }
 .tooltip {
   position: fixed;
   z-index: 60;
@@ -307,6 +309,15 @@ img, .icon { image-rendering: pixelated; }
 .touch .tbtn { position: absolute; width: 64px; height: 64px; border-radius: 12px; background: rgba(30, 32, 38, 0.55); border: 2px solid rgba(255, 255, 255, 0.28); color: #fff; display: flex; align-items: center; justify-content: center; font-family: var(--font); font-size: 14px; pointer-events: auto; }
 .touch .tbtn.on { background: rgba(240, 166, 64, 0.5); }
 .touch .tbtn.small { width: 48px; height: 40px; font-size: 12px; }
+.touch .fn-keys { position: absolute; right: calc(env(safe-area-inset-right, 0px) + 20px); top: calc(env(safe-area-inset-top, 0px) + 60px); max-width: calc(100vw - 40px); display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.touch .tbtn.fn { position: static; width: 54px; height: 44px; flex-direction: column; gap: 2px; font-size: 10px; line-height: 1; border-radius: 10px; background: rgba(30, 32, 38, 0.75); }
+.touch .tbtn.fn b { font-weight: 400; font-size: 12px; color: #ffe14d; }
+/* Inventories and chat on touch screens: no Esc key, shift or right button */
+.touch-bar { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 8px); display: flex; gap: 8px; z-index: 5; }
+.touch-bar button, .chat-btn { min-width: 48px; height: 40px; padding: 0 12px; border-radius: 10px; background: rgba(30, 32, 38, 0.85); border: 2px solid rgba(255, 255, 255, 0.3); color: #fff; font-family: var(--font); font-size: 13px; }
+.touch-bar button.on { background: rgba(240, 166, 64, 0.7); }
+.chat-input-wrap.touch { display: flex; gap: 6px; align-items: center; }
+.chat-input-wrap.touch input { flex: 1; min-width: 0; font-size: 16px; }
 
 /* Multiplayer */
 .mp-help { text-align: center; line-height: 1.5; margin-top: calc(var(--gs) * 2); }

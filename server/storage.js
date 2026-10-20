@@ -171,14 +171,6 @@ export class Storage {
     return sync ? this.writeSync(file, data) : this.write(file, data);
   }
 
-  hasPlayers() {
-    try {
-      return fs.readdirSync(this.playerDir).some((f) => f.endsWith('.json'));
-    } catch {
-      return false;
-    }
-  }
-
   loadPlayer(name) {
     return this.readJSON(this.playerPath(name));
   }

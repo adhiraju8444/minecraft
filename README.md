@@ -37,10 +37,13 @@ For single-player only, the game is also a plain static site with no build step:
 | Players online (multiplayer) | Tab (hold) |
 | Camera view (first, behind, front) | F5 |
 | Debug info | F3 |
+| Switch game mode (operators, and single-player worlds that are not Hardcore) | F3 + F4 |
 | Hide HUD / screenshot | F1 / F2 |
 | Pause | Esc |
 
-Keys can be rebound under Options → Controls. On phones and tablets an on-screen stick and buttons appear: drag to look, tap to use, and hold to mine.
+Keys can be rebound under Options → Controls.
+
+On phones and tablets an on-screen stick and buttons appear: drag to look, tap to use, and hold to mine. **Sprint** and **Sneak** stay on until tapped again, **Drop** drops one item (hold it for the whole stack), **Chat** opens the keyboard, and **Fn** shows the function keys: Mode (F3+F4), Command (`/`), Players (Tab, in multiplayer), Pick block, Camera (F5), Info (F3), HUD (F1) and Photo (F2). Inventory screens get **✕** to close, **Quick Move** (works like shift-click) and **Split** (works like right-click).
 
 Inventory screens support click to pick up or place, right-click to split or place one, shift-click to move a stack, drag to spread items over slots, double-click to gather, and number keys to swap with the hotbar. Every crafting grid has a recipe list; click a recipe to fill the grid from your inventory.
 
@@ -70,7 +73,8 @@ Other dimensions, redstone, enchanting, brewing, villages and other structures, 
 
 1. Start the server (`npm install`, then `npm start`) on the computer that will host the world.
 2. Everyone opens the server's address in a browser, clicks **Multiplayer**, types a name and clicks **Join Server**. When the page came from the server itself, the address box can stay empty.
-3. Chat with **T**, hold **Tab** to see who is online, and type `/help` for commands.
+3. Chat with **T**, hold **Tab** to see who is online, and type `/help` for commands. On a phone, use the **Chat** and **Fn** buttons.
+4. The first player to join becomes the server's operator (admin), whatever the game mode. Operators switch between Survival, Creative and Spectator with **F3+F4** (**Fn → Mode** on a phone) or `/gamemode`.
 
 The first time a name joins a server, the browser stores a secret key for that server, so nobody else can play as that name there later (each server gets its own key, so one server can never pass your key to another). Names ignore capitals, spaces and underscores: "Bob Smith" and "bob_smith" are the same player. Playing from another browser or device means picking a different name.
 
@@ -127,7 +131,7 @@ The server is configured with environment variables:
 | `PASSWORD` | none | If set, players must enter it to join |
 | `PVP` | `true` | Whether players can hurt each other |
 | `OPS` | none | Comma-separated names that are operators (admins) |
-| `AUTO_OP` | `true` | The very first player to join a new world becomes an operator (only once per world) |
+| `AUTO_OP` | `true` | The first player to join a world that has no operators becomes one. This happens once per world, so a later `deop` sticks |
 | `VIEW_DISTANCE` | `10` | Largest view distance (in chunks) the server supports |
 | `SIM_DISTANCE` | `5` | Chunks around each player where the world is alive (mobs, crops, water) |
 | `AUTOSAVE_SECONDS` | `60` | How often the world is saved |
@@ -172,8 +176,9 @@ vendor/three.module.min.js  Three.js r160 (MIT)
 - `node tools/preview-art.mjs art.png` renders every texture and item sprite to a sheet.
 - `node tools/preview-map.mjs <seed> <radius> map.png` renders a top-down terrain map.
 - `npm test` (with the server running and Playwright installed) plays through core mechanics in headless Chromium: movement speed, jumping, crafting, water flow, lava and water, falling sand, smelting, mining, TNT, fall damage, sleeping, and saving and reloading a world.
-- `npm run test:server` starts a server with an empty world and checks the network protocol with two scripted players.
+- `npm run test:server` starts a server with an empty world and checks the network protocol with two scripted players, including who becomes an operator.
 - `npm run test:multiplayer` starts a server and has two browsers play together: seeing each other move, building, chat, item drops and pickups, chests, furnaces, mobs, PvP, death and respawn, a server restart, and name protection.
+- `npm run test:touch` plays on an emulated phone: every on-screen button and function key, game mode switching, the inventory's Quick Move, Split and close buttons, and chat, then joins a fresh server as its first player and operator.
 
 ## Credits
 

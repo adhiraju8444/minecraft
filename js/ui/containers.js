@@ -47,6 +47,10 @@ export class ContainerUI {
     window.addEventListener('pointermove', (e) => {
       this.mouse = [e.clientX, e.clientY];
     });
+    // A tap has no hover, so the held stack follows the last tap too.
+    window.addEventListener('pointerdown', (e) => {
+      this.mouse = [e.clientX, e.clientY];
+    }, true);
     window.addEventListener('pointerup', (e) => this.onPointerUp(e));
   }
 
@@ -59,7 +63,9 @@ export class ContainerUI {
 
   // ---------------------------------------------------------------- building
   begin(kind, title) {
+    const mode = this.open ? this.touchMode : '';
     this.close(true);
+    this.touchMode = mode;
     this.open = true;
     this.kind = kind;
     this.slots = [];
@@ -68,11 +74,43 @@ export class ContainerUI {
     this.panel = node.querySelector('.cpanel');
     if (title) this.panel.appendChild(el(`<h4>${title}</h4>`));
     node.addEventListener('pointerdown', (e) => {
-      if (e.target === node) this.clickOutside(e.button);
+      if (e.target === node) this.clickOutside(this.button(e));
     });
     node.addEventListener('contextmenu', (e) => e.preventDefault());
+    if (this.game.input.touchActive) this.addTouchBar(node);
     this.ui.root.appendChild(node);
     this.ui.updateHudVisibility();
+  }
+
+  // Phones have no Esc key, shift or right button: a bar with Close and two
+  // modes that change what tapping a slot does.
+  addTouchBar(node) {
+    const bar = el(`<div class="touch-bar"><button data-m="shift">Quick Move</button><button data-m="split">Split</button><button data-m="close">✕</button></div>`);
+    const paint = () => bar.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === this.touchMode));
+    bar.querySelectorAll('button').forEach((b) => b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.ui.click();
+      const m = b.dataset.m;
+      if (m === 'close') {
+        this.close();
+        this.game.resume();
+        return;
+      }
+      this.touchMode = this.touchMode === m ? '' : m;
+      paint();
+    }));
+    paint();
+    node.appendChild(bar);
+  }
+
+  // Mouse button of a click; the Split mode turns taps into right clicks.
+  button(e) {
+    return this.touchMode === 'split' && e.button === 0 ? 2 : e.button;
+  }
+
+  shifted(e) {
+    return e.shiftKey || this.touchMode === 'shift';
   }
 
   makeSlot(parent, opts) {
@@ -95,7 +133,8 @@ export class ContainerUI {
       if (this.hover === slot) this.hover = null;
     });
     s.addEventListener('dblclick', (e) => {
-      if (e.button === 0 && !e.shiftKey) this.gather(slot);
+      // Two quick taps in Split or Quick Move mode are not a double-click.
+      if (e.button === 0 && !e.shiftKey && !this.touchMode) this.gather(slot);
     });
     s.addEventListener('contextmenu', (e) => e.preventDefault());
     parent.appendChild(s);
@@ -452,7 +491,7 @@ export class ContainerUI {
       e.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
         this.ui.click();
-        this.fillRecipe(r, ev.shiftKey);
+        this.fillRecipe(r, this.shifted(ev));
       });
       list.appendChild(e);
     }
@@ -513,9 +552,10 @@ export class ContainerUI {
 
   onSlotDown(slot, e) {
     this.game.audio.init();
-    const button = e.button;
+    const button = this.button(e);
     if (button !== 0 && button !== 2) return;
-    if (e.shiftKey) {
+    const shift = this.shifted(e);
+    if (shift) {
       this.shiftClick(slot);
       return;
     }
@@ -524,7 +564,7 @@ export class ContainerUI {
       return;
     }
     if (slot.palette) {
-      this.paletteClick(slot, button, e.shiftKey);
+      this.paletteClick(slot, button, shift);
       return;
     }
     if (slot.output) {

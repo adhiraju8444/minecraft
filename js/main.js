@@ -285,7 +285,10 @@ class Game extends GameCore {
     this.showClickToPlay();
     const motd = welcome.server?.motd;
     this.ui.chat(`Connected to ${this.meta.name}${motd ? ' — ' + motd : ''}`, '#ffe14d');
-    if (!pd) this.ui.chat('Press T to chat, Tab to see who is online, /help for commands.', '#ffe14d');
+    if (!pd) this.ui.chat(this.input.touchActive ? 'Tap Chat to talk and Fn for more keys.' : 'Press T to chat, Tab to see who is online, /help for commands.', '#ffe14d');
+    if (welcome.autoOp) {
+      this.ui.chat(`You joined first, so you are this server's operator (admin). Switch game mode with ${this.input.touchActive ? 'Fn → Mode' : 'F3+F4'} or /gamemode, and type /help for the other commands.`, '#ffe14d');
+    }
   }
 
   leaveServer() {
@@ -694,6 +697,25 @@ class Game extends GameCore {
 
   cyclePerspective() {
     this.perspective = (this.perspective + 1) % 3;
+  }
+
+  // Operators, and single-player worlds that are not hardcore, can switch
+  // game mode with F3+F4 or the Mode touch button.
+  canSwitchMode() {
+    if (!this.player) return false;
+    if (this.net) return !!this.net.welcome?.op;
+    return !this.meta?.hardcore;
+  }
+
+  cycleGameMode() {
+    if (this.state !== 'playing' || !this.player) return;
+    if (!this.canSwitchMode()) {
+      this.ui.chat(this.net ? 'Only server operators can change game mode' : 'Game mode is locked in Hardcore', '#ff5555');
+      return;
+    }
+    const order = ['survival', 'creative', 'spectator'];
+    const next = order[(order.indexOf(this.player.mode) + 1) % order.length];
+    this.commands.run('/gamemode ' + next);
   }
 
   screenshot() {

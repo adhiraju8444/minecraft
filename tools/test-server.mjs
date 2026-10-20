@@ -21,14 +21,15 @@ process.on('uncaughtException', (e) => {
   console.error(e);
   process.exit(1);
 });
-await new Promise((resolve, reject) => {
+const ready = (proc) => new Promise((resolve, reject) => {
   let out = '';
-  server.stdout.on('data', (d) => {
+  proc.stdout.on('data', (d) => {
     out += d;
     if (out.includes('Type "help"')) resolve();
   });
-  server.on('exit', (code) => reject(new Error('server exited: ' + code + '\n' + out)));
+  proc.on('exit', (code) => reject(new Error('server exited: ' + code + '\n' + out)));
 });
+await ready(server);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
 const check = (ok, what) => {
@@ -42,10 +43,11 @@ class Bot {
     this.msgs = [];
     this.chunks = [];
     this.key = (name + '-test-key-0123456789abcdef').replace(/[^A-Za-z0-9_-]/g, '_');
+    this.url = URL;
   }
   connect() {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(URL);
+      this.ws = new WebSocket(this.url);
       this.ws.binaryType = 'arraybuffer';
       this.ws.on('open', () => {
         this.send({ t: 'hello', v: PROTOCOL, name: this.name, key: this.key, vd: 6 });
@@ -97,11 +99,13 @@ const a = new Bot('Alice');
 const b = new Bot('Bob');
 const wa = await a.connect();
 check(!!wa && wa.seed !== undefined, 'Alice gets a welcome with the world seed');
+check(!!wa && wa.op === true && wa.autoOp === true, 'the first player to join becomes an operator');
 const sp = wa.spawn;
 a.state(sp.x, sp.y + 1, sp.z);
 a.send({ t: 'ready' });
 const wb = await b.connect();
 check(!!wb, 'Bob joins');
+check(!!wb && wb.op === false && !wb.autoOp, 'the second player is not an operator');
 b.state(sp.x + 2, sp.y + 1, sp.z);
 b.send({ t: 'ready' });
 await sleep(600);
@@ -239,6 +243,47 @@ await new Promise((r) => {
   server.on('exit', r);
   server.kill('SIGTERM');
 });
+
+// ---------------------------------------------------------------- operators
+// A world saved by an older version, with players but no operator: the
+// first player to join becomes one, whatever the server's game mode, and
+// only once per world.
+const OLD = fs.mkdtempSync(path.join(os.tmpdir(), 'blockforge-srv-'));
+fs.cpSync(DATA, OLD, { recursive: true });
 fs.rmSync(DATA, { recursive: true, force: true });
+const lvl = JSON.parse(fs.readFileSync(path.join(OLD, 'level.json'), 'utf8'));
+delete lvl.firstOp;
+lvl.autoOpDone = true;
+fs.writeFileSync(path.join(OLD, 'level.json'), JSON.stringify(lvl));
+fs.writeFileSync(path.join(OLD, 'ops.json'), '[]');
+const PORT2 = PORT + 1;
+const server2 = spawn(process.execPath, ['server/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(PORT2), DATA_DIR: OLD, GAMEMODE: 'creative' }, stdio: ['ignore', 'pipe', 'inherit'] });
+process.on('exit', () => server2.kill('SIGKILL'));
+await ready(server2);
+const d = new Bot('Bob');
+d.url = `ws://localhost:${PORT2}/ws`;
+const wd = await d.connect();
+check(!!wd && wd.op === true && wd.autoOp === true, 'first player on a world without operators becomes one');
+d.state(sp.x, sp.y + 1, sp.z);
+d.send({ t: 'ready' });
+for (const m of ['spectator', 'survival', 'creative']) {
+  d.send({ t: 'chat', m: '/gamemode ' + m });
+  check(!!(await d.waitFor((x) => x.t === 'mode' && x.m === m && !x.seen && (x.seen = true))), `operator switches to ${m}`);
+}
+d.send({ t: 'chat', m: '/deop Bob' });
+check(!!(await d.waitFor((x) => x.t === 'op' && x.on === false)), 'operator can deop themselves');
+const e = new Bot('Carol');
+e.url = d.url;
+const we = await e.connect();
+check(!!we && we.op === false && !we.autoOp, 'after that nobody else becomes an operator automatically');
+d.ws.close();
+e.ws.close();
+await sleep(300);
+server2.removeAllListeners('exit');
+await new Promise((r) => {
+  server2.on('exit', r);
+  server2.kill('SIGTERM');
+});
+fs.rmSync(OLD, { recursive: true, force: true });
 console.log(failures ? `${failures} check(s) failed` : 'All server checks passed');
 process.exit(failures ? 1 : 0);

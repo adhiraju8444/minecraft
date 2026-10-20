@@ -445,6 +445,7 @@ export class NetClient {
         return;
       case 'pl':
         this.players = m.l;
+        if (g.ui.playerListEl) g.ui.showPlayerList(true);
         return;
       case 'kick':
         this.reason = m.reason || 'Kicked from the server';
