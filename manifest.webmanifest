@@ -1,0 +1,12 @@
+{
+  "name": "Blockforge",
+  "short_name": "Blockforge",
+  "description": "A voxel survival sandbox game that runs in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b0c10",
+  "theme_color": "#0b0c10",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

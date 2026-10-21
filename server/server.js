@@ -168,6 +168,7 @@ const MIME = {
   '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
 };
 const PUBLIC_DIRS = ['css', 'js', 'vendor'];
+const PUBLIC_FILES = ['/index.html', '/manifest.webmanifest', '/icon.svg'];
 const cache = new Map();
 
 function serveStatic(req, res, urlPath) {
@@ -175,7 +176,7 @@ function serveStatic(req, res, urlPath) {
   if (rel === '/' || rel === '') rel = '/index.html';
   const file = path.resolve(ROOT, '.' + path.posix.normalize(rel));
   const top = path.relative(ROOT, file).split(path.sep)[0];
-  const allowed = file.startsWith(ROOT + path.sep) && (rel === '/index.html' || PUBLIC_DIRS.includes(top));
+  const allowed = file.startsWith(ROOT + path.sep) && (PUBLIC_FILES.includes(rel) || PUBLIC_DIRS.includes(top));
   if (!allowed) return notFound(res);
   let st;
   try {
@@ -194,7 +195,7 @@ function serveStatic(req, res, urlPath) {
   let entry = cache.get(file);
   if (!entry || entry.etag !== etag) {
     const body = fs.readFileSync(file);
-    const text = /^(text|application\/json|image\/svg)/.test(type);
+    const text = /^(text|application\/(json|manifest)|image\/svg)/.test(type);
     entry = { etag, body, gz: text && body.length > 1024 ? zlib.gzipSync(body, { level: 9 }) : null };
     cache.set(file, entry);
   }

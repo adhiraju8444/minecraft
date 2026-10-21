@@ -11,6 +11,9 @@ import { FACING_NAMES } from '../world/constants.js';
 import { BLOCKS } from '../data/blocks.js';
 import { TouchControls } from './touch.js';
 import { fetchServerInfo } from '../net/client.js';
+import { canFullscreen, isApp, isFullscreen, toggleFullscreen, onFullscreenChange } from './fullscreen.js';
+
+const FULLSCREEN_HINT = 'This browser cannot show a web page full screen. On an iPhone or iPad: tap the Share button, then "Add to Home Screen", and start Blockforge from the new icon. It opens full screen, with no browser bars.';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (html) => {
@@ -43,6 +46,18 @@ export class UI {
     this.applyScale();
     window.addEventListener('resize', () => this.applyScale());
     this.touch = new TouchControls(game, this);
+    onFullscreenChange(() => this.root.querySelectorAll('[data-fs]').forEach((b) => (b.textContent = this.fullscreenLabel(b.dataset.fs))));
+  }
+
+  fullscreenLabel(kind) {
+    if (kind === 'toggle') return `Fullscreen: ${isFullscreen() ? 'ON' : 'OFF'}`;
+    return isFullscreen() ? 'Exit Fullscreen' : 'Fullscreen';
+  }
+
+  // Must run inside the click: browsers only allow full screen after a tap.
+  fullscreen(back) {
+    if (!canFullscreen()) return this.showNetError('Fullscreen', FULLSCREEN_HINT, back);
+    toggleFullscreen();
   }
 
   // ---------------------------------------------------------------- general
@@ -161,8 +176,8 @@ export class UI {
         <div class="menu-col">
           <button class="btn" data-act="single">Singleplayer</button>
           <button class="btn" data-act="multi">Multiplayer</button>
-          <button class="btn" data-act="options">Options…</button>
-          <button class="btn" data-act="help">How to Play</button>
+          <div class="btn-row"><button class="btn" data-act="options">Options…</button><button class="btn" data-act="help">How to Play</button></div>
+          ${isApp() ? '' : `<button class="btn" data-act="fullscreen" data-fs="title">${this.fullscreenLabel('title')}</button>`}
         </div>
         <div class="corner left">Blockforge 1.0</div>
         <div class="corner right">Fan-made voxel sandbox · not affiliated with Mojang or Microsoft</div>
@@ -172,6 +187,7 @@ export class UI {
       multi: () => this.showMultiplayer(),
       options: () => this.showOptions(() => this.showTitle()),
       help: () => this.showHelp(() => this.showTitle()),
+      fullscreen: () => this.fullscreen(() => this.showTitle()),
     });
     this.setScreen('title', node);
     const draw = () => drawLogo($('#title-logo', node));
@@ -375,10 +391,11 @@ export class UI {
     slider('GUI Scale', 'guiScale', 0, 4, 1, (v) => (v === 0 ? 'Auto' : v));
     toggle(() => `View Bobbing: ${s.viewBob ? 'ON' : 'OFF'}`, () => (s.viewBob = !s.viewBob));
     toggle(() => `Clouds: ${s.clouds ? 'ON' : 'OFF'}`, () => (s.clouds = !s.clouds));
-    toggle(() => `Invert Mouse: ${s.invertY ? 'ON' : 'OFF'}`, () => (s.invertY = !s.invertY));
+    toggle(() => `Invert ${g.input.touchActive ? 'Look' : 'Mouse'}: ${s.invertY ? 'ON' : 'OFF'}`, () => (s.invertY = !s.invertY));
     toggle(() => `Show FPS: ${s.showFps ? 'ON' : 'OFF'}`, () => (s.showFps = !s.showFps));
     toggle(() => `Resolution: ${s.pixelRatio > 1 ? 'Sharp (HiDPI)' : 'Fast'}`, () => (s.pixelRatio = s.pixelRatio > 1 ? 1 : 2));
     toggle(() => `Touch Controls: ${s.touch === 'auto' ? 'Auto' : s.touch === 'on' ? 'ON' : 'OFF'}`, () => (s.touch = s.touch === 'auto' ? 'on' : s.touch === 'on' ? 'off' : 'auto'));
+    if (!isApp()) toggle(() => this.fullscreenLabel('toggle'), () => this.fullscreen(() => this.showOptions(backTo))).dataset.fs = 'toggle';
     // In multiplayer the server decides the difficulty (/difficulty for operators).
     if (g.world && g.state !== 'title' && !g.meta?.hardcore && !g.net) {
       toggle(() => `Difficulty: ${DIFFICULTY[g.difficulty]}`, () => {

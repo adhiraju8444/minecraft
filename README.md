@@ -43,7 +43,9 @@ For single-player only, the game is also a plain static site with no build step:
 
 Keys can be rebound under Options → Controls.
 
-On phones and tablets an on-screen stick and buttons appear: drag to look, tap to use, and hold to mine. **Sprint** and **Sneak** stay on until tapped again, **Drop** drops one item (hold it for the whole stack), **Chat** opens the keyboard, and **Fn** shows the function keys: Mode (F3+F4), Command (`/`), Players (Tab, in multiplayer), Pick block, Camera (F5), Info (F3), HUD (F1) and Photo (F2). Inventory screens get **✕** to close, **Quick Move** (works like shift-click) and **Split** (works like right-click).
+On phones and tablets an on-screen stick and buttons appear: drag anywhere on the screen to turn the first-person camera left, right, up and down (you can walk with the stick and look with your other thumb at the same time), tap to use or place, and hold still to mine. Sensitivity and Invert Look in Options apply to touch too. **Sprint** and **Sneak** stay on until tapped again, **Drop** drops one item (hold it for the whole stack), **Chat** opens the keyboard, and **Fn** shows the function keys: Mode (F3+F4), Command (`/`), Players (Tab, in multiplayer), Pick block, Camera (F5), Info (F3), HUD (F1) and Photo (F2). Inventory screens get **✕** to close, **Quick Move** (works like shift-click) and **Split** (works like right-click).
+
+**Fullscreen**: the title screen has a Fullscreen button, and Options has a Fullscreen switch for use mid-game. On Android phones it also locks the screen sideways where the browser allows it. iPhones do not let web pages go full screen; there, tap Share → **Add to Home Screen** and start Blockforge from the new icon, which opens full screen. Worlds saved in the browser are not shared with the home-screen app.
 
 Inventory screens support click to pick up or place, right-click to split or place one, shift-click to move a stack, drag to spread items over slots, double-click to gather, and number keys to swap with the hotbar. Every crafting grid has a recipe list; click a recipe to fill the grid from your inventory.
 
@@ -178,7 +180,7 @@ vendor/three.module.min.js  Three.js r160 (MIT)
 - `npm test` (with the server running and Playwright installed) plays through core mechanics in headless Chromium: movement speed, jumping, crafting, water flow, lava and water, falling sand, smelting, mining, TNT, fall damage, sleeping, and saving and reloading a world.
 - `npm run test:server` starts a server with an empty world and checks the network protocol with two scripted players, including who becomes an operator.
 - `npm run test:multiplayer` starts a server and has two browsers play together: seeing each other move, building, chat, item drops and pickups, chests, furnaces, mobs, PvP, death and respawn, a server restart, and name protection.
-- `npm run test:touch` plays on an emulated phone: every on-screen button and function key, game mode switching, the inventory's Quick Move, Split and close buttons, and chat, then joins a fresh server as its first player and operator.
+- `npm run test:touch` plays on an emulated phone: Fullscreen, looking around by dragging (both axes, and while walking), every on-screen button and function key, game mode switching, the inventory's Quick Move, Split and close buttons, and chat, then joins a fresh server as its first player and operator.
 
 ## Credits
 

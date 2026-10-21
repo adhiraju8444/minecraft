@@ -81,9 +81,32 @@ async function hold(sel, ms) {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
+// Touch points are [x, y] (or [x, y, id] for a second finger).
+async function drag(points, ms = 300) {
+  const tp = (pts) => pts.map(([x, y, id = 0]) => ({ x, y, id }));
+  const [from, to] = points;
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: tp([from]) });
+  const steps = 12;
+  for (let i = 1; i <= steps; i++) {
+    const k = i / steps;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: tp([[from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2]]]) });
+    await sleep(ms / steps);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+const view = () => g(() => ({ yaw: window.blockforge.player.yaw, pitch: window.blockforge.player.pitch }));
+
 // ---------------------------------------------------------------- single-player
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction(() => window.blockforge && window.blockforge.state === 'title');
+// Fullscreen from the title screen.
+check(await visible('[data-act="fullscreen"]'), 'title screen has a Fullscreen button');
+await page.tap('[data-act="fullscreen"]');
+check(await until(() => !!document.fullscreenElement), 'Fullscreen button enters full screen');
+check(await until(() => document.querySelector('[data-act="fullscreen"]').textContent === 'Exit Fullscreen'), 'the button then offers to exit');
+await page.tap('[data-act="fullscreen"]');
+check(await until(() => !document.fullscreenElement && document.querySelector('[data-act="fullscreen"]').textContent === 'Fullscreen'), 'Exit Fullscreen leaves full screen');
+check((await page.request.get(URL + 'manifest.webmanifest')).ok(), 'the web app manifest is served (home screen = full screen)');
 await g(() => window.blockforge.createWorld({ name: 'Phone', seed: 'phone', mode: 'survival', difficulty: 0 }));
 await page.waitForFunction(() => window.blockforge.state === 'playing', null, { timeout: 120000 });
 await g(() => window.blockforge.ui.closeScreen());
@@ -119,6 +142,50 @@ check(!(await g(() => window.blockforge.ui.hudVisible)), 'F1 key hides the HUD')
 await tap('fn');
 await tap('hud');
 check(await g(() => window.blockforge.ui.hudVisible), 'F1 key shows the HUD again');
+
+// First-person camera: drag anywhere on the open screen to look around.
+check(await g(() => document.elementFromPoint(560, 150)?.id === 'game'), 'touches on the open screen reach the game', await g(() => document.elementFromPoint(560, 150)?.className));
+await g(() => (window.blockforge.player.pitch = 0));
+let v0 = await view();
+await drag([[450, 150], [650, 150]]);
+let v1 = await view();
+check(v1.yaw < v0.yaw - 0.3 && Math.abs(v1.pitch - v0.pitch) < 0.05, 'dragging sideways turns the camera left and right (x axis)', `${(v1.yaw - v0.yaw).toFixed(2)} / ${(v1.pitch - v0.pitch).toFixed(2)}`);
+v0 = v1;
+await drag([[500, 250], [500, 130]]);
+v1 = await view();
+check(v1.pitch > v0.pitch + 0.2 && Math.abs(v1.yaw - v0.yaw) < 0.05, 'dragging up tilts the camera up (y axis)', `${(v1.yaw - v0.yaw).toFixed(2)} / ${(v1.pitch - v0.pitch).toFixed(2)}`);
+v0 = v1;
+await drag([[500, 130], [400, 230]]);
+v1 = await view();
+check(v1.pitch < v0.pitch - 0.2 && v1.yaw > v0.yaw + 0.2, 'a diagonal drag moves both axes at once', `${(v1.yaw - v0.yaw).toFixed(2)} / ${(v1.pitch - v0.pitch).toFixed(2)}`);
+// Walk with one thumb and look with the other.
+{
+  const st = await g(() => {
+    const r = document.querySelector('.touch .stick').getBoundingClientRect();
+    return [r.x + r.width / 2, r.y + r.height / 2];
+  });
+  v0 = await view();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: st[0], y: st[1], id: 1 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }, { x: 500, y: 180, id: 2 }] });
+  for (let i = 1; i <= 10; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }, { x: 500 + i * 15, y: 180, id: 2 }] });
+    await sleep(25);
+  }
+  const walking = await g(() => window.blockforge.input.state.forward);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  v1 = await view();
+  check(walking && v1.yaw < v0.yaw - 0.2, 'walking with the stick while dragging to look', `forward=${walking} ${(v1.yaw - v0.yaw).toFixed(2)}`);
+  check(!(await g(() => window.blockforge.input.state.forward)), 'letting go stops walking');
+}
+// Hold still to mine, tap a hotbar slot to select it.
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 520, y: 170 }] });
+await sleep(500);
+check(await g(() => window.blockforge.input.state.attack), 'holding a finger still mines');
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+check(!(await g(() => window.blockforge.input.state.attack)), 'lifting the finger stops mining');
+await page.tap('.hotbar .hslot:nth-child(5)');
+check((await g(() => window.blockforge.player.inventory.selected)) === 4, 'tapping the hotbar selects a slot');
 
 await tap('sprint');
 check(await g(() => window.blockforge.input.state.sprint && document.querySelector('.touch [data-b="sprint"]').classList.contains('on')), 'Sprint stays on after a tap');

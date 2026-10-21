@@ -184,7 +184,7 @@ class Game extends GameCore {
     this.ui.updateHudVisibility();
     this.acc = 0;
     this.showClickToPlay();
-    if (!pd) this.ui.chat(`Welcome to ${meta.name}! Press ${'T'} to chat, /help for commands.`, '#ffe14d');
+    if (!pd) this.ui.chat(`Welcome to ${meta.name}! ${this.input.touchActive ? 'Drag anywhere to look around. Tap Chat to talk and Fn for more keys.' : 'Press T to chat, /help for commands.'}`, '#ffe14d');
   }
 
   // Load the area around the player before starting.
@@ -285,7 +285,7 @@ class Game extends GameCore {
     this.showClickToPlay();
     const motd = welcome.server?.motd;
     this.ui.chat(`Connected to ${this.meta.name}${motd ? ' — ' + motd : ''}`, '#ffe14d');
-    if (!pd) this.ui.chat(this.input.touchActive ? 'Tap Chat to talk and Fn for more keys.' : 'Press T to chat, Tab to see who is online, /help for commands.', '#ffe14d');
+    if (!pd) this.ui.chat(this.input.touchActive ? 'Drag anywhere to look around. Tap Chat to talk and Fn for more keys.' : 'Press T to chat, Tab to see who is online, /help for commands.', '#ffe14d');
     if (welcome.autoOp) {
       this.ui.chat(`You joined first, so you are this server's operator (admin). Switch game mode with ${this.input.touchActive ? 'Fn → Mode' : 'F3+F4'} or /gamemode, and type /help for the other commands.`, '#ffe14d');
     }

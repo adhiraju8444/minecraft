@@ -6,7 +6,7 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8080 DATA_DIR=/data
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY index.html ./
+COPY index.html manifest.webmanifest icon.svg ./
 COPY css ./css
 COPY js ./js
 COPY vendor ./vendor
