@@ -1,5 +1,6 @@
-// On-screen controls for phones and tablets: a movement stick, look by
-// dragging, tap to use/place and hold to mine/attack, plus buttons for the
+// On-screen controls for phones and tablets: drag anywhere on the screen
+// that has no button to look around, tap to use/place and hold to mine/attack,
+// plus buttons for the
 // keys a phone does not have (Fn opens the function keys).
 const TOP = 'calc(env(safe-area-inset-top,0px) + 12px)';
 
@@ -20,7 +21,6 @@ export class TouchControls {
     this.game = game;
     this.ui = ui;
     this.node = null;
-    this.stickId = null;
     this.lookId = null;
     this.lookStart = null;
     this.sneakOn = false;
@@ -40,7 +40,6 @@ export class TouchControls {
     const node = document.createElement('div');
     node.className = 'touch';
     node.innerHTML = `
-      <div class="stick"><div class="nub"></div></div>
       <div class="tbtn" data-b="sprint" style="left:calc(env(safe-area-inset-left,0px) + 172px);bottom:calc(env(safe-area-inset-bottom,0px) + 28px)">Sprint</div>
       <div class="tbtn" data-b="jump" style="right:24px;bottom:110px">Jump</div>
       <div class="tbtn" data-b="sneak" style="right:100px;bottom:40px">Sneak</div>
@@ -59,41 +58,7 @@ export class TouchControls {
     this.fnPanel = node.querySelector('.fn-keys');
     this.modeBtn = node.querySelector('[data-b="mode"]');
     this.playersBtn = node.querySelector('[data-b="players"]');
-    const stick = node.querySelector('.stick');
-    const nub = node.querySelector('.nub');
     const input = this.game.input;
-    const setStick = (dx, dy) => {
-      const r = 50;
-      const l = Math.hypot(dx, dy);
-      if (l > r) { dx = (dx / l) * r; dy = (dy / l) * r; }
-      nub.style.transform = `translate(${dx}px, ${dy}px)`;
-      const nx = dx / r, ny = dy / r;
-      input.state.forward = ny < -0.3;
-      input.state.back = ny > 0.3;
-      input.state.left = nx < -0.3;
-      input.state.right = nx > 0.3;
-      input.state.sprint = this.sprintOn || ny < -0.95;
-    };
-    stick.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      const t = e.changedTouches[0];
-      this.stickId = t.identifier;
-      const r = stick.getBoundingClientRect();
-      this.stickCenter = [r.left + r.width / 2, r.top + r.height / 2];
-      setStick(t.clientX - this.stickCenter[0], t.clientY - this.stickCenter[1]);
-    }, { passive: false });
-    stick.addEventListener('touchmove', (e) => {
-      e.preventDefault();
-      for (const t of e.changedTouches) if (t.identifier === this.stickId) setStick(t.clientX - this.stickCenter[0], t.clientY - this.stickCenter[1]);
-    }, { passive: false });
-    const endStick = (e) => {
-      for (const t of e.changedTouches) if (t.identifier === this.stickId) {
-        this.stickId = null;
-        setStick(0, 0);
-      }
-    };
-    stick.addEventListener('touchend', endStick);
-    stick.addEventListener('touchcancel', endStick);
 
     node.querySelectorAll('.tbtn').forEach((b) => {
       const name = b.dataset.b;

@@ -479,7 +479,7 @@ export class UI {
           <h3>Handy keys</h3>
           <p>${kn('drop')} drop item · ${kn('chat')} chat · ${kn('command')} commands (try <kbd>/help</kbd>) · ${kn('perspective')} camera view · ${kn('debug')} coordinates and info · ${kn('debug')}+<kbd>F4</kbd> switch game mode (operators) · ${kn('hideHud')} hide the HUD · ${kn('screenshot')} screenshot · middle-click picks a block.</p>
           <h3>Phones and tablets</h3>
-          <p>Use the stick to walk and drag anywhere to look. Tap to use or place, hold to mine or attack. Sprint and Sneak stay on until you tap them again; tap Drop for one item or hold it for the stack. Fn shows the function keys: game mode, commands, players online, pick block, camera, info, HUD and photo. In inventories, Quick Move and Split change what a tap does, and ✕ closes.</p>
+          <p>Drag anywhere on the screen that has no button to look around. Tap to use or place, hold to mine or attack. Sprint and Sneak stay on until you tap them again; tap Drop for one item or hold it for the stack. Fn shows the function keys: game mode, commands, players online, pick block, camera, info, HUD and photo. In inventories, Quick Move and Split change what a tap does, and ✕ closes.</p>
           <p>In inventories: shift-click moves a stack, right-click splits a stack or places one item, drag with the left button to spread items, number keys swap with the hotbar, double-click gathers a full stack.</p>
         </div>
         <div class="menu-col"><button class="btn" data-act="done">Done</button></div>

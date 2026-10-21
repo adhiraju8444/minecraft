@@ -304,11 +304,9 @@ img, .icon { image-rendering: pixelated; }
 
 /* ---------------------------------------------------------------- touch */
 /* The layer itself lets touches through to the game (to look, mine and
-   place); only its buttons and the stick catch them. */
+   place); only its buttons catch them. */
 #ui .touch, #ui .touch .fn-keys { pointer-events: none; }
 .touch { position: absolute; inset: 0; }
-.touch .stick { position: absolute; left: calc(env(safe-area-inset-left, 0px) + 28px); bottom: calc(env(safe-area-inset-bottom, 0px) + 28px); width: 132px; height: 132px; border-radius: 50%; background: rgba(255, 255, 255, 0.08); border: 2px solid rgba(255, 255, 255, 0.25); pointer-events: auto; }
-.touch .stick .nub { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(255, 255, 255, 0.3); }
 .touch .tbtn { position: absolute; width: 64px; height: 64px; border-radius: 12px; background: rgba(30, 32, 38, 0.55); border: 2px solid rgba(255, 255, 255, 0.28); color: #fff; display: flex; align-items: center; justify-content: center; font-family: var(--font); font-size: 14px; pointer-events: auto; }
 .touch .tbtn.on { background: rgba(240, 166, 64, 0.5); }
 .touch .tbtn.small { width: 48px; height: 40px; font-size: 12px; }

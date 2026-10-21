@@ -112,6 +112,7 @@ await page.waitForFunction(() => window.blockforge.state === 'playing', null, { 
 await g(() => window.blockforge.ui.closeScreen());
 check(await until(() => window.blockforge.input.touchActive && document.querySelector('.touch')?.classList.contains('hidden') === false, null, 60000), 'touch controls appear on a phone');
 for (const b of ['sprint', 'chat', 'fn', 'drop', 'inv', 'pause', 'jump', 'sneak', 'attack', 'use']) check(await visible(`.touch [data-b="${b}"]`), `button shown: ${b}`);
+check(!(await visible('.touch .stick')), 'no on-screen joystick');
 check(!(await visible('.touch .fn-keys')), 'function keys start hidden');
 
 await tap('fn');
@@ -158,26 +159,6 @@ v0 = v1;
 await drag([[500, 130], [400, 230]]);
 v1 = await view();
 check(v1.pitch < v0.pitch - 0.2 && v1.yaw > v0.yaw + 0.2, 'a diagonal drag moves both axes at once', `${(v1.yaw - v0.yaw).toFixed(2)} / ${(v1.pitch - v0.pitch).toFixed(2)}`);
-// Walk with one thumb and look with the other.
-{
-  const st = await g(() => {
-    const r = document.querySelector('.touch .stick').getBoundingClientRect();
-    return [r.x + r.width / 2, r.y + r.height / 2];
-  });
-  v0 = await view();
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: st[0], y: st[1], id: 1 }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }, { x: 500, y: 180, id: 2 }] });
-  for (let i = 1; i <= 10; i++) {
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: st[0], y: st[1] - 45, id: 1 }, { x: 500 + i * 15, y: 180, id: 2 }] });
-    await sleep(25);
-  }
-  const walking = await g(() => window.blockforge.input.state.forward);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  v1 = await view();
-  check(walking && v1.yaw < v0.yaw - 0.2, 'walking with the stick while dragging to look', `forward=${walking} ${(v1.yaw - v0.yaw).toFixed(2)}`);
-  check(!(await g(() => window.blockforge.input.state.forward)), 'letting go stops walking');
-}
 // Hold still to mine, tap a hotbar slot to select it.
 await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 520, y: 170 }] });
 await sleep(500);
